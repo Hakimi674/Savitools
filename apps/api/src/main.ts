@@ -3,7 +3,12 @@ import {
   FastifyAdapter,
   NestFastifyApplication,
 } from "@nestjs/platform-fastify";
-import { RequestMethod, ValidationPipe, VersioningType } from "@nestjs/common";
+import {
+  Logger,
+  RequestMethod,
+  ValidationPipe,
+  VersioningType,
+} from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import cookie from "@fastify/cookie";
@@ -11,6 +16,7 @@ import multipart from "@fastify/multipart";
 import { AppModule } from "./app.module";
 import { enableGracefulShutdown } from "./config/graceful-shutdown";
 import { parseWebOrigins } from "./config/web-origins";
+import { VALIDATION_PIPE_OPTIONS } from "./config/validation-pipe.config";
 import { WebSocketCorsAdapter } from "./config/websocket-cors.adapter";
 
 async function bootstrap() {
@@ -42,16 +48,9 @@ async function bootstrap() {
   });
   app.useWebSocketAdapter(new WebSocketCorsAdapter(app, webOrigins));
 
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-      transformOptions: {
-        enableImplicitConversion: true,
-      },
-    }),
-  );
+  // The options live in config/validation-pipe.config.ts so they can be
+  // exercised as behaviour by main.spec.ts.
+  app.useGlobalPipes(new ValidationPipe(VALIDATION_PIPE_OPTIONS));
 
   // Block GraphQL introspection in production
   if (nodeEnv === 'production') {
@@ -100,4 +99,12 @@ async function bootstrap() {
   console.log(`Swagger docs at http://localhost:${port}/${prefix}/docs`);
 }
 
-bootstrap();
+bootstrap().catch((error) => {
+  new Logger("Bootstrap").error(
+    `Savitools API failed to start: ${
+      error instanceof Error ? error.message : String(error)
+    }`,
+    error instanceof Error ? error.stack : undefined,
+  );
+  process.exit(1);
+});

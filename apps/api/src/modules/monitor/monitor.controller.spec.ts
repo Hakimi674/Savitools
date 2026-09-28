@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
-import { HttpStatus } from '@nestjs/common';
+import { ServiceUnavailableException } from '@nestjs/common';
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
 import { MonitorController } from './monitor.controller';
@@ -108,15 +108,13 @@ describe('MonitorController SSE and Metrics', () => {
 
     expect(controller.getMetrics().activeSseConnections).toBe(2);
 
-    await controller.stream(reply3);
-
-    expect(reply3.status).toHaveBeenCalledWith(HttpStatus.SERVICE_UNAVAILABLE);
-    expect(reply3.send).toHaveBeenCalledWith(
-      expect.objectContaining({
-        statusCode: HttpStatus.SERVICE_UNAVAILABLE,
-        message: 'Maximum SSE connections reached',
-      }),
+    // The controller throws instead of writing the response itself; the global
+    // ApiExceptionFilter turns this into the single shared error envelope.
+    await expect(controller.stream(reply3)).rejects.toThrow(
+      ServiceUnavailableException,
     );
+    expect(reply3.status).not.toHaveBeenCalled();
+    expect(reply3.send).not.toHaveBeenCalled();
   });
 
   it('cleans up connections on client disconnect', async () => {

@@ -9,6 +9,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import * as smolToml from 'smol-toml';
 import { assertPublicHostname, MAX_SAFE_REDIRECTS } from '../../common/ssrf-guard';
+import { isStellarPublicKey } from '../../common/stellar-address';
 
 const FETCH_TIMEOUT = 15_000;
 export const DEFAULT_FEDERATION_PROBE_TIMEOUT_MS = 3_000;
@@ -23,10 +24,6 @@ export const TOML_MAX_BYTES = 512 * 1024;
 export const TOML_MAX_DEPTH = 64;
 /** Hard cap on keys produced by a single document. */
 export const TOML_MAX_KEYS = 10_000;
-
-function isPublicKey(input: string): boolean {
-  return /^G[A-Z2-7]{55}$/.test(input);
-}
 
 function isFederationAddress(input: string): boolean {
   return /^[^\s*]+[*][^\s*]+\.[^\s*]+$/.test(input);
@@ -164,7 +161,6 @@ export interface TransferLinkResult {
   warning: string;
 }
 
-const PUBLIC_KEY_RE = /^G[A-Z2-7]{55}$/;
 /** Decimal string only — never routed through Number to avoid float conversion. */
 const DECIMAL_STRING_RE = /^\d+(\.\d+)?$/;
 const HTTPS_URL_RE = /^https:\/\/[^\s]+$/i;
@@ -376,7 +372,7 @@ export class FederationService {
   ): Promise<FederationResolveResult> {
     const input = address.trim();
 
-    if (isPublicKey(input)) {
+    if (isStellarPublicKey(input)) {
       return this.reverseLookup(input);
     }
 
@@ -793,7 +789,7 @@ export class FederationService {
         `account (Stellar public key G…) is required for SEP-${params.sep} request links`,
       );
     }
-    if (params.account && !PUBLIC_KEY_RE.test(params.account)) {
+    if (params.account && !isStellarPublicKey(params.account)) {
       throw new BadRequestException('account must be a Stellar public key (G…)');
     }
 
