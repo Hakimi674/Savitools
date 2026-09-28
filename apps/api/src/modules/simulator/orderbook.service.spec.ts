@@ -1,5 +1,9 @@
 jest.mock('redis', () => {
   const mockRedisClient = {
+    // The service checks `isReady` before issuing commands and `isOpen` before
+    // quitting, so the mock has to model connection state (#291).
+    isReady: false,
+    isOpen: false,
     connect: jest.fn(),
     quit: jest.fn(),
     lPush: jest.fn(),
@@ -74,6 +78,10 @@ describe('OrderbookService', () => {
   beforeEach(() => {
     jest.restoreAllMocks();
     jest.clearAllMocks();
+    // Suites that drive the cached paths directly expect a connected client;
+    // the `onModuleInit` suite below flips this back to a cold client.
+    mockRedisClient.isReady = true;
+    mockRedisClient.isOpen = true;
     service = new OrderbookService({ get: jest.fn(() => 'redis://localhost:6379') } as any);
   });
 
@@ -277,8 +285,16 @@ describe('OrderbookService', () => {
   });
 
   describe('onModuleInit / onModuleDestroy', () => {
+    beforeEach(() => {
+      mockRedisClient.isReady = false;
+      mockRedisClient.isOpen = false;
+      mockRedisClient.connect.mockImplementation(async () => {
+        mockRedisClient.isReady = true;
+        mockRedisClient.isOpen = true;
+      });
+    });
+
     it('connects to Redis, seeds the default pair, and polls', async () => {
-      mockRedisClient.connect.mockResolvedValue(undefined);
       mockRedisClient.zAdd.mockResolvedValue(undefined);
       mockRedisClient.zCard.mockResolvedValue(1);
       mockRedisClient.zRange.mockResolvedValue([
@@ -298,15 +314,56 @@ describe('OrderbookService', () => {
       expect(mockRedisClient.lPush).toHaveBeenCalled();
     });
 
+    it('retries a failed connection on the next tick instead of degrading for the process lifetime', async () => {
+      mockRedisClient.connect.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+      jest.spyOn((service as any).logger, 'error').mockImplementation(() => undefined);
+      mockRedisClient.zRange.mockResolvedValue([]);
+
+      await service.onModuleInit();
+
+      // Nothing could be written while Redis was down...
+      expect(mockRedisClient.zAdd).not.toHaveBeenCalled();
+      // ...but the poller is running, so the next tick retries.
+      expect((service as any).pollInterval).toBeDefined();
+
+      await (service as any).pollActivePairs();
+
+      expect(mockRedisClient.connect).toHaveBeenCalledTimes(2);
+      expect(mockRedisClient.zRange).toHaveBeenCalled();
+      expect(mockRedisClient.isReady).toBe(true);
+    });
+
+    it('says out loud that polling is degraded when Redis is unavailable at boot', async () => {
+      mockRedisClient.connect.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+      const errorSpy = jest
+        .spyOn((service as any).logger, 'error')
+        .mockImplementation(() => undefined);
+
+      await service.onModuleInit();
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('degraded'));
+    });
+
     it('clears interval and quits Redis on destroy', async () => {
       (service as any).redisClient = mockRedisClient;
       const clearIntervalSpy = jest.spyOn(global, 'clearInterval');
       (service as any).pollInterval = setInterval(() => {}, 60000);
+      mockRedisClient.isOpen = true;
 
       await service.onModuleDestroy();
 
       expect(clearIntervalSpy).toHaveBeenCalled();
       expect(mockRedisClient.quit).toHaveBeenCalled();
+    });
+
+    it('does not quit a client that never opened', async () => {
+      (service as any).redisClient = mockRedisClient;
+      mockRedisClient.quit.mockClear();
+      mockRedisClient.isOpen = false;
+
+      await expect(service.onModuleDestroy()).resolves.toBeUndefined();
+
+      expect(mockRedisClient.quit).not.toHaveBeenCalled();
     });
   });
 

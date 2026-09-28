@@ -206,16 +206,17 @@ describe('AuthService', () => {
       expect(options.rp.name).toBe('SaviTools');
       expect(options.challenge).toBeDefined();
 
-      // The challenge is stored for this user only.
+      // The challenge is stored for this user only. The store is a
+      // BoundedTtlMap, so the expiry lives on the map (#291).
       const stored = (service as any).passkeyChallenges;
-      const entry = [...stored.values()].find(
-        (e: any) => e.challenge === options.challenge,
-      );
+      const entry = stored
+        .keys()
+        .map((key: string) => stored.get(key))
+        .find((e: any) => e?.challenge === options.challenge);
       expect(entry.rpId).toBe('localhost');
       expect(entry.type).toBe('registration');
-      expect(entry.expiresAt).toBeLessThanOrEqual(
-        Date.now() + 120_000,
-      );
+      expect(stored.ttl).toBe(120_000);
+      expect(stored.capacity).toBe(10_000);
     });
 
     it('revoked credentials cannot authenticate', async () => {

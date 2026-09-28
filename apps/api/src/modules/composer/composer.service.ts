@@ -18,6 +18,7 @@ import {
   xdr,
 } from '@stellar/stellar-sdk';
 import { BuildTransactionDto, OperationDto } from './dto/build-transaction.dto';
+import { BoundedTtlMap } from '../../common/bounded-ttl-map';
 import { SimulateTransactionDto } from './dto/simulate-transaction.dto';
 import { BenchmarkTransactionDto } from './dto/benchmark-transaction.dto';
 import { FeeBumpDto } from './dto/fee-bump.dto';
@@ -234,15 +235,15 @@ export interface SimulationResult {
   ledger: number | null;
 }
 
-interface CachedSimulation {
-  result: SimulationResult;
-  expiresAt: number;
-}
-
-interface CachedSequence {
-  sequence: string;
-  expiresAt: number;
-}
+/**
+ * Ceilings for the two process-local caches (#291). The simulation cache is
+ * keyed by XDR, so its cap is the memory bound for attacker-supplied payloads;
+ * the sequence cache is keyed by account and only needs to cover a working set.
+ */
+const MAX_SIMULATION_CACHE_ENTRIES = 1000;
+const SIMULATION_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_SEQUENCE_CACHE_ENTRIES = 1000;
+const SEQUENCE_CACHE_TTL_MS = 30 * 1000; // 30 seconds
 
 function isNativeAssetCode(code: string | undefined): boolean {
   return code === 'native' || code === 'XLM' || !code;
@@ -347,11 +348,21 @@ function liquidityPoolOperationError(operation: any): string | null {
 @Injectable()
 export class ComposerService {
   private readonly logger = new Logger(ComposerService.name);
-  private readonly simulationCache = new Map<string, CachedSimulation>();
-  private readonly sequenceCache = new Map<string, CachedSequence>();
-  private readonly MAX_CACHE_SIZE = 1000;
-  private readonly CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-  private readonly SEQUENCE_TTL_MS = 30 * 1000; // 30 seconds
+  /**
+   * Both caches are process-local and written from request paths, so they carry
+   * a hard entry bound and a TTL instead of growing with traffic
+   * (Savitura/Savitools#291). `BoundedTtlMap` owns the LRU trim that
+   * `simulationCache` used to hand-roll — and that `sequenceCache` did not have
+   * at all.
+   */
+  private readonly simulationCache = new BoundedTtlMap<string, SimulationResult>({
+    maxEntries: MAX_SIMULATION_CACHE_ENTRIES,
+    ttlMs: SIMULATION_CACHE_TTL_MS,
+  });
+  private readonly sequenceCache = new BoundedTtlMap<string, string>({
+    maxEntries: MAX_SEQUENCE_CACHE_ENTRIES,
+    ttlMs: SEQUENCE_CACHE_TTL_MS,
+  });
 
   getOperations() {
     return OPERATION_MANIFEST;
@@ -374,20 +385,16 @@ export class ComposerService {
     network: 'testnet' | 'mainnet',
   ): Promise<string> {
     const cacheKey = `${network}:${sourceAccount}`;
-    const now = Date.now();
     const cached = this.sequenceCache.get(cacheKey);
-    if (cached && cached.expiresAt > now) {
-      return cached.sequence;
+    if (cached !== undefined) {
+      return cached;
     }
 
     const server = this.getHorizonServer(network);
     try {
       const account = await server.loadAccount(sourceAccount);
       const sequence = account.sequenceNumber();
-      this.sequenceCache.set(cacheKey, {
-        sequence,
-        expiresAt: now + this.SEQUENCE_TTL_MS,
-      });
+      this.sequenceCache.set(cacheKey, sequence);
       return sequence;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -560,16 +567,11 @@ export class ComposerService {
   async simulateTransaction(dto: SimulateTransactionDto) {
     try {
       const cacheKey = `${dto.network || 'testnet'}:${dto.xdr}`;
-      const now = Date.now();
+      // Reading counts as use inside the cache, so a hot entry is not evicted by
+      // a cold one — the LRU trim is the cache's job now, not this method's.
       const cached = this.simulationCache.get(cacheKey);
-
       if (cached) {
-        if (cached.expiresAt > now) {
-          this.simulationCache.delete(cacheKey);
-          this.simulationCache.set(cacheKey, cached);
-          return cached.result;
-        }
-        this.simulationCache.delete(cacheKey);
+        return cached;
       }
 
       let tx: Transaction;
@@ -598,17 +600,7 @@ export class ComposerService {
         ledger: null,
       };
 
-      if (this.simulationCache.size >= this.MAX_CACHE_SIZE) {
-        const oldestKey = this.simulationCache.keys().next().value;
-        if (oldestKey !== undefined) {
-          this.simulationCache.delete(oldestKey);
-        }
-      }
-
-      this.simulationCache.set(cacheKey, {
-        result,
-        expiresAt: now + this.CACHE_TTL_MS,
-      });
+      this.simulationCache.set(cacheKey, result);
 
       return result;
     } catch (err: unknown) {
