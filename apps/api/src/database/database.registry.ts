@@ -32,6 +32,7 @@ import { CreateNetworkProfiles1786400000000 } from './migrations/1786400000000-c
 import { WorkspaceDefaultUniqueIndex1786400000000 } from './migrations/1786400000000-workspace-default-unique-index';
 import { DropGraphSnapshots1786500000000 } from './migrations/1786500000000-drop-graph-snapshots';
 import { DropTransactionSequenceRun1790607330235 } from './migrations/1790607330235-drop-transaction-sequence-run';
+import { AddApiKeyMaskedKey1790700000000 } from './migrations/1790700000000-add-api-key-masked-key';
 
 /** A TypeORM migration constructor as passed to `DataSourceOptions.migrations`. */
 export type MigrationClass = new () => MigrationInterface;
@@ -91,4 +92,5 @@ export const ALL_MIGRATIONS: MigrationClass[] = [
   WorkspaceDefaultUniqueIndex1786400000000,
   DropGraphSnapshots1786500000000,
   DropTransactionSequenceRun1790607330235,
+  AddApiKeyMaskedKey1790700000000,
 ];
