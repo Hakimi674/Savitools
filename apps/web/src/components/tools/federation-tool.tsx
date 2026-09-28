@@ -15,6 +15,7 @@ import {
   CheckCircle,
   ChevronDown,
   ChevronRight,
+  Clock,
   Copy,
   ExternalLink,
   FileText,
@@ -146,7 +147,11 @@ function CollapsiblePanel({
   );
 }
 
-function SepBadge({ status }: { status: 'green' | 'yellow' | 'red' | 'none' }) {
+function SepBadge({
+  status,
+}: {
+  status: 'green' | 'yellow' | 'red' | 'none' | 'timeout';
+}) {
   if (status === 'green')
     return (
       <span className="inline-flex items-center gap-1 text-xs font-medium text-green-400 bg-green-400/10 rounded px-1.5 py-0.5">
@@ -157,6 +162,12 @@ function SepBadge({ status }: { status: 'green' | 'yellow' | 'red' | 'none' }) {
     return (
       <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-400 bg-amber-400/10 rounded px-1.5 py-0.5">
         <AlertTriangle className="h-3 w-3" /> Declared
+      </span>
+    );
+  if (status === 'timeout')
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-300 bg-slate-300/10 rounded px-1.5 py-0.5">
+        <Clock className="h-3 w-3" /> Timed out
       </span>
     );
   return (

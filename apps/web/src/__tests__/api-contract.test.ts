@@ -621,3 +621,161 @@ describe('API-to-frontend route contract', () => {
     expect(init.method ?? 'GET').not.toBe('PUT');
   });
 });
+
+/**
+ * Field-level spot-check (Savitura/Savitools#294).
+ *
+ * The route contract above pins method and path for every wrapper, which says
+ * nothing about the *body*: a hand-written response interface could silently
+ * drift from what the controller returns and only surface at the first
+ * consumer, as a type error or as wrong rendering. Each entry below names the
+ * fields `apps/api` returns for a spot-checked response and the server source it
+ * mirrors.
+ *
+ * The check is deliberately one-directional: the web declaration must contain
+ * every server field (extra optional web-only fields are allowed), and a union
+ * field must include every member the server can produce.
+ */
+interface ResponseFieldContract {
+  /** Interface declared in `lib/api.ts`. */
+  type: string;
+  /** Fields the API returns for that response. */
+  fields: readonly string[];
+  /** Fields whose declared union must contain every member the server produces. */
+  unions?: Readonly<Record<string, readonly string[]>>;
+  /** Server source this mirrors, quoted in the failure message. */
+  server: string;
+}
+
+const RESPONSE_FIELD_CONTRACTS: readonly ResponseFieldContract[] = [
+  {
+    type: 'SandboxPaymentResult',
+    server: 'apps/api/src/modules/sandbox/sandbox.service.ts:119-131',
+    fields: [
+      'success',
+      'txHash',
+      'feeCharged',
+      'resultCode',
+      'destination',
+      'destinationAccount',
+      'muxedId',
+      'asset',
+      'amount',
+    ],
+    // `result.fee_charged` is declared `fee_charged?: string` by the Stellar
+    // client, so this is a string of stroops — not a number.
+    unions: { feeCharged: ['string'] },
+  },
+  {
+    type: 'SepInfo',
+    server: 'apps/api/src/modules/federation/federation.service.ts:124-130',
+    fields: ['number', 'name', 'supported', 'endpoint', 'probeStatus'],
+    // The probe reports 'timeout' for a SEP whose endpoint never answered.
+    unions: { probeStatus: ['green', 'yellow', 'red', 'none', 'timeout'] },
+  },
+  {
+    type: 'SepResult',
+    server: 'apps/api/src/modules/federation/federation.service.ts:132-136',
+    fields: ['seps', 'tomlStatus'],
+  },
+  {
+    type: 'WebhookHistoryEntry',
+    server: 'apps/api/src/modules/webhook/webhook.service.ts:27-47',
+    fields: [
+      'id',
+      'timestamp',
+      'endpointUrl',
+      'eventType',
+      'method',
+      'requestHeaders',
+      'payload',
+      'responseStatus',
+      'responseHeaders',
+      'responseBody',
+      'latencyMs',
+    ],
+    // The stored body is the raw response text, never a parsed object.
+    unions: { responseBody: ['string'] },
+  },
+];
+
+/** The block of `export interface <name> { ... }`, or null when it is absent. */
+function interfaceBody(source: string, name: string): string | null {
+  const start = source.indexOf(`export interface ${name} {`);
+  if (start === -1) return null;
+  const end = source.indexOf('\n}', start);
+  return end === -1 ? null : source.slice(start, end);
+}
+
+/** Top-level field names declared by an interface body. */
+function declaredFields(body: string): Set<string> {
+  return new Set(
+    [...body.matchAll(/^\s{2}([A-Za-z0-9_]+)\??\s*:/gm)].map((match) => match[1]),
+  );
+}
+
+function responseFieldProblems(source: string): string[] {
+  const problems: string[] = [];
+
+  for (const contract of RESPONSE_FIELD_CONTRACTS) {
+    const body = interfaceBody(source, contract.type);
+    if (!body) {
+      problems.push(`${contract.type} is not declared in lib/api.ts`);
+      continue;
+    }
+
+    const fields = declaredFields(body);
+    for (const field of contract.fields) {
+      if (!fields.has(field)) {
+        problems.push(
+          `${contract.type}.${field} is missing — the server returns it (${contract.server})`,
+        );
+      }
+    }
+
+    for (const [field, members] of Object.entries(contract.unions ?? {})) {
+      const declaration =
+        body.match(new RegExp(`^\\s{2}${field}\\??\\s*:([^;\\n]*)`, 'm'))?.[1] ?? '';
+      for (const member of members) {
+        if (!declaration.includes(member)) {
+          problems.push(
+            `${contract.type}.${field} does not allow "${member}" — the server produces it (${contract.server})`,
+          );
+        }
+      }
+    }
+  }
+
+  return problems;
+}
+
+describe('API response field contract', () => {
+  const apiSource = readFileSync(join(SRC_ROOT, 'lib/api.ts'), 'utf8');
+
+  it('declares every field the spot-checked responses return', () => {
+    expect(responseFieldProblems(apiSource).join('\n')).toBe('');
+  });
+
+  it('bites: a declaration that drops a server field is reported', () => {
+    const truncated = apiSource.replace(
+      /export interface SepInfo \{[\s\S]*?\n\}/,
+      'export interface SepInfo {\n  number: number;\n}',
+    );
+
+    expect(truncated).not.toBe(apiSource);
+    expect(responseFieldProblems(truncated).join('\n')).toContain(
+      'SepInfo.probeStatus is missing',
+    );
+  });
+
+  it('bites: an `any` declaration cannot stand in for a typed field', () => {
+    const untyped = apiSource.replace(
+      /responseBody: string;/,
+      'responseBody: any;',
+    );
+
+    expect(responseFieldProblems(untyped).join('\n')).toContain(
+      'WebhookHistoryEntry.responseBody does not allow "string"',
+    );
+  });
+});

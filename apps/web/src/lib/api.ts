@@ -1050,7 +1050,7 @@ export interface WebhookHistoryEntry {
   statusCode?: number | null;
   responseStatus?: number | null;
   responseHeaders: Record<string, string>;
-  responseBody: any;
+  responseBody: string;
   latencyMs: number;
   timestamp: number;
   error?: string;
@@ -1146,7 +1146,8 @@ export interface SandboxFundResult {
 export interface SandboxPaymentResult {
   success: boolean;
   txHash: string;
-  feeCharged: number;
+  /** Fee in stroops, exactly as Horizon reports it (`fee_charged`). */
+  feeCharged?: string;
   resultCode: string;
   destination: string;
   /** Underlying G… account a muxed destination pays into. */
@@ -1475,11 +1476,13 @@ export interface SepInfo {
   name: string;
   supported: boolean;
   endpoint: string | null;
-  probeStatus: "green" | "yellow" | "red" | "none";
+  probeStatus: "green" | "yellow" | "red" | "none" | "timeout";
 }
 
 export interface SepResult {
   seps: SepInfo[];
+  /** Additive TOML state, so an unavailable or malformed document is not hidden. */
+  tomlStatus?: "available" | "unavailable" | "malformed";
 }
 
 export async function resolveFederation(address: string) {
