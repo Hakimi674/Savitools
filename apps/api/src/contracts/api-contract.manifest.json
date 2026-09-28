@@ -265,7 +265,7 @@
     {
       "method": "GET",
       "path": "/api/v1/monitor/metrics",
-      "auth": "public"
+      "auth": "jwt"
     },
     {
       "method": "GET",
@@ -280,7 +280,7 @@
     {
       "method": "GET",
       "path": "/api/v1/monitor/stream",
-      "auth": "public"
+      "auth": "jwt"
     },
     {
       "method": "GET",
