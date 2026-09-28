@@ -7,6 +7,7 @@ import {
   Req,
   Query,
   BadRequestException,
+  ServiceUnavailableException,
   UnprocessableEntityException,
   UseGuards,
   Inject,
@@ -26,7 +27,10 @@ import * as crypto from 'crypto';
 @ApiTags('contracts')
 @Controller('contracts')
 export class ContractsController {
-  private static wizardSessions = new Map<string, { lastStep: number; wasmBuffer?: Buffer; admin?: string; salt?: string; args?: unknown[]; expiresAt: number }>();
+  private static readonly MAX_WIZARD_SESSIONS = 32;
+  private static readonly MAX_WIZARD_BUFFER_BYTES = 32 * 1024 * 1024;
+  private static wizardBufferBytes = 0;
+  private static wizardSessions = new Map<string, { lastStep: number; wasmBuffer?: Buffer; admin?: string; salt?: string; args?: unknown[]; expiresAt: number; deploying?: boolean }>();
 
   constructor(private readonly contractsService: ContractsService) {}
 
@@ -79,10 +83,9 @@ export class ContractsController {
   @ApiResponse({ status: 400, description: 'Validation failed or out of order step' })
   async deployWizard(@Req() req: FastifyRequest, @Body() dto: DeployWizardDto) {
     const now = Date.now();
-    // Clean expired sessions
     for (const [k, v] of ContractsController.wizardSessions.entries()) {
-      if (v.expiresAt < now) {
-        ContractsController.wizardSessions.delete(k);
+      if (v.expiresAt < now && !v.deploying) {
+        ContractsController.removeWizardSession(k);
       }
     }
 
@@ -113,6 +116,9 @@ export class ContractsController {
       if (wasmBuffer.length > maxWasmBytes) {
         throw new BadRequestException(`WASM file exceeds maximum size of ${maxWasmBytes / (1024 * 1024)}MB`);
       }
+      if (wasmBuffer.length > ContractsController.MAX_WIZARD_BUFFER_BYTES) {
+        throw new BadRequestException('WASM file exceeds the deployment wizard storage limit');
+      }
 
       // Validate WASM magic header and init auth check
       if (wasmBuffer.length < 4 || wasmBuffer.readUInt32LE(0) !== 0x6d736100) {
@@ -120,11 +126,28 @@ export class ContractsController {
       }
 
       const stepToken = crypto.randomBytes(32).toString('hex');
+      while (
+        ContractsController.wizardSessions.size >= ContractsController.MAX_WIZARD_SESSIONS ||
+        ContractsController.wizardBufferBytes + wasmBuffer.length > ContractsController.MAX_WIZARD_BUFFER_BYTES
+      ) {
+        const oldestToken = [...ContractsController.wizardSessions.entries()].find(
+          ([, session]) => !session.deploying,
+        )?.[0];
+        if (!oldestToken) break;
+        ContractsController.removeWizardSession(oldestToken);
+      }
+      if (
+        ContractsController.wizardSessions.size >= ContractsController.MAX_WIZARD_SESSIONS ||
+        ContractsController.wizardBufferBytes + wasmBuffer.length > ContractsController.MAX_WIZARD_BUFFER_BYTES
+      ) {
+        throw new ServiceUnavailableException('Deployment wizard capacity is temporarily full');
+      }
       ContractsController.wizardSessions.set(stepToken, {
         lastStep: 1,
         wasmBuffer,
         expiresAt: now + ttl,
       });
+      ContractsController.wizardBufferBytes += wasmBuffer.length;
 
       return {
         step: 1,
@@ -141,6 +164,9 @@ export class ContractsController {
       const session = ContractsController.wizardSessions.get(dto.stepToken);
       if (!session || session.expiresAt < now) {
         throw new BadRequestException('Invalid or expired step token');
+      }
+      if (session.deploying) {
+        throw new BadRequestException('Deployment is already in progress for this session');
       }
       if (session.lastStep < 1) {
         throw new BadRequestException('Out-of-order execution: Step 1 must be completed first');
@@ -165,8 +191,8 @@ export class ContractsController {
       session.expiresAt = now + ttl;
 
       const nextStepToken = crypto.randomBytes(32).toString('hex');
-      ContractsController.wizardSessions.set(nextStepToken, session);
       ContractsController.wizardSessions.delete(dto.stepToken);
+      ContractsController.wizardSessions.set(nextStepToken, session);
 
       return {
         step: 2,
@@ -190,15 +216,25 @@ export class ContractsController {
       if (!session.wasmBuffer) {
         throw new BadRequestException('WASM buffer missing from session state');
       }
+      if (session.deploying) {
+        throw new BadRequestException('Deployment is already in progress for this session');
+      }
 
-      const result = await this.contractsService.deployConfigured({
-        wasmBuffer: session.wasmBuffer,
-        admin: session.admin,
-        salt: session.salt,
-        constructorArgs: session.args,
-      });
+      session.deploying = true;
+      let result: Awaited<ReturnType<ContractsService['deployConfigured']>>;
+      try {
+        result = await this.contractsService.deployConfigured({
+          wasmBuffer: session.wasmBuffer,
+          admin: session.admin,
+          salt: session.salt,
+          constructorArgs: session.args,
+        });
+      } catch (error) {
+        session.deploying = false;
+        throw error;
+      }
 
-      ContractsController.wizardSessions.delete(dto.stepToken);
+      ContractsController.removeWizardSession(dto.stepToken);
 
       return {
         step: 3,
@@ -347,5 +383,12 @@ export class ContractsController {
       if (err instanceof BadRequestException) throw err;
       throw new BadRequestException('Invalid JSON in args field');
     }
+  }
+
+  private static removeWizardSession(token: string): void {
+    const session = ContractsController.wizardSessions.get(token);
+    if (!session) return;
+    ContractsController.wizardSessions.delete(token);
+    ContractsController.wizardBufferBytes -= session.wasmBuffer?.length ?? 0;
   }
 }

@@ -10,7 +10,10 @@ import {
 import * as argon2 from 'argon2';
 import { createHash } from 'crypto';
 import { AuthService } from './auth.service';
-import { DISCOVERABLE_CHALLENGE_OWNER } from './auth.constants';
+import {
+  DISCOVERABLE_CHALLENGE_OWNER,
+  REFRESH_TOKEN_REUSE_GRACE_MS,
+} from './auth.constants';
 import { EncryptionService } from '../../common/encryption.service';
 
 function mockRepo() {
@@ -852,10 +855,12 @@ describe('AuthService', () => {
       });
 
       it('replay: reuse of a consumed token revokes the whole family, including the newly rotated token', async () => {
-        const { svc } = setup('replay-me');
+        const { svc, table } = setup('replay-me');
 
         const first = await svc.refresh('replay-me');
-        // Replay the original (already-rotated) token.
+        const consumed = table._rows.get('rt-3')!;
+        consumed.revokedAt = new Date(Date.now() - REFRESH_TOKEN_REUSE_GRACE_MS - 1);
+
         await expect(svc.refresh('replay-me')).rejects.toThrow(UnauthorizedException);
 
         // The token issued to the legitimate caller during the first
@@ -863,6 +868,23 @@ describe('AuthService', () => {
         await expect(svc.refresh(first.tokens.refreshToken)).rejects.toThrow(
           UnauthorizedException,
         );
+      });
+
+      it('does not revoke descendants when a duplicated request reuses a recently consumed token', async () => {
+        const { svc, table } = setup('duplicate-refresh');
+
+        const first = await svc.refresh('duplicate-refresh');
+        await expect(svc.refresh('duplicate-refresh')).rejects.toThrow(
+          UnauthorizedException,
+        );
+
+        const childHash = createHash('sha256')
+          .update(first.tokens.refreshToken)
+          .digest('hex');
+        const child = [...table._rows.values()].find(
+          (row) => row.tokenHash === childHash,
+        );
+        expect(child?.revokedAt).toBeNull();
       });
 
       it('concurrent refresh: two simultaneous requests for the same token — exactly one succeeds', async () => {
@@ -885,6 +907,17 @@ describe('AuthService', () => {
         // The original row must never be left NULL/reusable regardless of
         // which caller "won" — it is atomically consumed exactly once.
         expect(table._rows.get('rt-3')?.revokedAt).not.toBeNull();
+        const winner = [a, b].find(
+          (result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof svc.refresh>>> =>
+            result.status === 'fulfilled',
+        )!;
+        const childHash = createHash('sha256')
+          .update(winner.value.tokens.refreshToken)
+          .digest('hex');
+        const child = [...table._rows.values()].find(
+          (row) => row.tokenHash === childHash,
+        );
+        expect(child?.revokedAt).toBeNull();
       });
     });
   });

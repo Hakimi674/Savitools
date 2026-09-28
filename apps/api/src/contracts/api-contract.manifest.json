@@ -584,26 +584,6 @@
     },
     {
       "method": "GET",
-      "path": "/api/v1/wallet/balances",
-      "auth": "public"
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/wallet/fund",
-      "auth": "public"
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/wallet/generate",
-      "auth": "public"
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/wallet/payment",
-      "auth": "public"
-    },
-    {
-      "method": "GET",
       "path": "/api/v1/webhooks/history",
       "auth": "jwt"
     },

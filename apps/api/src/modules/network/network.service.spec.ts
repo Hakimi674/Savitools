@@ -150,6 +150,7 @@ describe("NetworkService", () => {
           ),
         },
         order: { sampledAt: "ASC" },
+        take: 20_001,
       });
       expect(result.samples).toEqual([
         expect.objectContaining({
@@ -181,6 +182,51 @@ describe("NetworkService", () => {
         outageCount: 1,
         sampleCount: 4,
       });
+    });
+
+    it("caches identical ranges without sharing mutable response objects", async () => {
+      repository.find.mockResolvedValue([
+        sample("mainnet", "2026-08-31T10:00:10.000Z", true, 100),
+      ]);
+      const args = [
+        "mainnet" as const,
+        "2026-08-31T10:00:00.000Z",
+        "2026-08-31T10:01:00.000Z",
+      ] as const;
+
+      const first = await service.getHistory(...args);
+      first.samples[0].ok = false;
+      const second = await service.getHistory(...args);
+
+      expect(repository.find).toHaveBeenCalledTimes(1);
+      expect(second.samples[0].ok).toBe(true);
+    });
+
+    it("caches repeated requests that use the default rolling range", async () => {
+      repository.find.mockResolvedValue([]);
+
+      const first = await service.getHistory("mainnet");
+      const second = await service.getHistory("mainnet");
+
+      expect(repository.find).toHaveBeenCalledTimes(1);
+      expect(second.from).toBe(first.from);
+      expect(second.to).toBe(first.to);
+    });
+
+    it("rejects ranges whose raw sample count exceeds the aggregation limit", async () => {
+      repository.find.mockResolvedValue(
+        Array.from({ length: 20_001 }, () =>
+          sample("mainnet", "2026-08-31T10:00:10.000Z", true, 100),
+        ),
+      );
+
+      await expect(
+        service.getHistory(
+          "mainnet",
+          "2026-08-31T10:00:00.000Z",
+          "2026-08-31T10:01:00.000Z",
+        ),
+      ).rejects.toThrow(/more than 20000 samples/);
     });
 
     it("validates malformed and inverted date ranges", async () => {

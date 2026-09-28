@@ -3,10 +3,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ComposerController } from './composer.controller';
 import { ComposerService } from './composer.service';
 import { TransactionSequenceService } from './transaction-sequence.service';
-import { TransactionSequenceRun } from './entities/transaction-sequence-run.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([TransactionSequenceRun])],
   controllers: [ComposerController],
   providers: [ComposerService, TransactionSequenceService],
   exports: [ComposerService, TransactionSequenceService],

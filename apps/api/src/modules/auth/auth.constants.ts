@@ -3,6 +3,7 @@ export const REFRESH_TOKEN_COOKIE = 'savitools_refresh_token';
 
 export const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;               // 15 minutes
 export const REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;    // 30 days
+export const REFRESH_TOKEN_REUSE_GRACE_MS = 10 * 1000;
 export const EMAIL_VERIFICATION_TTL_SECONDS = 24 * 60 * 60;    // 24 hours
 export const PASSWORD_RESET_TTL_SECONDS = 30 * 60;             // 30 minutes
 

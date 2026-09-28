@@ -67,11 +67,19 @@ export interface NetworkHistoryResponse {
   samples: NetworkHistoryBucket[];
 }
 
+const MAX_HISTORY_SAMPLES = 20_000;
+const HISTORY_CACHE_TTL_MS = 15_000;
+const MAX_HISTORY_CACHE_ENTRIES = 100;
+
 @Injectable()
 export class NetworkService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(NetworkService.name);
   private pollInterval: NodeJS.Timeout;
   private pollInProgress = false;
+  private readonly historyCache = new Map<
+    string,
+    { expiresAt: number; response: NetworkHistoryResponse }
+  >();
 
   private readonly passphrases = {
     mainnet: StellarSdk.Networks.PUBLIC,
@@ -184,14 +192,6 @@ export class NetworkService implements OnModuleInit, OnModuleDestroy {
     await this.networkProfileRepository.update({ ownerId }, { isDefault: false });
     profile.isDefault = true;
     return this.networkProfileRepository.save(profile);
-  }
-
-  async getDefaultNetworkProfile(
-    ownerId: string,
-  ): Promise<NetworkProfile | null> {
-    return this.networkProfileRepository.findOne({
-      where: { ownerId, isDefault: true },
-    });
   }
 
   async exportNetworkProfile(
@@ -408,17 +408,35 @@ export class NetworkService implements OnModuleInit, OnModuleDestroy {
     to?: string,
   ): Promise<NetworkHistoryResponse> {
     const range = this.parseHistoryRange(from, to);
+    const cacheKey = `${network}:${from ? range.from.getTime() : 'default-from'}:${to ? range.to.getTime() : 'default-to'}`;
+    const now = Date.now();
+    for (const [key, entry] of this.historyCache) {
+      if (entry.expiresAt <= now) this.historyCache.delete(key);
+    }
+    const cached = this.historyCache.get(cacheKey);
+    if (cached) {
+      this.historyCache.delete(cacheKey);
+      this.historyCache.set(cacheKey, cached);
+      return structuredClone(cached.response);
+    }
+
     const samples = await this.sampleRepository.find({
       where: {
         network,
         sampledAt: Between(range.from, range.to),
       },
       order: { sampledAt: "ASC" },
+      take: MAX_HISTORY_SAMPLES + 1,
     });
+    if (samples.length > MAX_HISTORY_SAMPLES) {
+      throw new BadRequestException(
+        `history range contains more than ${MAX_HISTORY_SAMPLES} samples; narrow the date range`,
+      );
+    }
 
     const buckets = this.bucketSamples(samples);
 
-    return {
+    const response: NetworkHistoryResponse = {
       network,
       from: range.from.toISOString(),
       to: range.to.toISOString(),
@@ -426,6 +444,17 @@ export class NetworkService implements OnModuleInit, OnModuleDestroy {
       summary: this.summarizeBuckets(buckets),
       samples: buckets,
     };
+
+    while (this.historyCache.size >= MAX_HISTORY_CACHE_ENTRIES) {
+      const oldestKey = this.historyCache.keys().next().value;
+      if (!oldestKey) break;
+      this.historyCache.delete(oldestKey);
+    }
+    this.historyCache.set(cacheKey, {
+      expiresAt: now + HISTORY_CACHE_TTL_MS,
+      response,
+    });
+    return structuredClone(response);
   }
 
   async pruneRetention(now = new Date()) {
@@ -508,7 +537,12 @@ export class NetworkService implements OnModuleInit, OnModuleDestroy {
 
     for (const sample of samples) {
       const bucket = Math.floor(sample.sampledAt.getTime() / 60000) * 60000;
-      grouped.set(bucket, [...(grouped.get(bucket) ?? []), sample]);
+      const bucketSamples = grouped.get(bucket);
+      if (bucketSamples) {
+        bucketSamples.push(sample);
+      } else {
+        grouped.set(bucket, [sample]);
+      }
     }
 
     return [...grouped.entries()].map(([timestamp, bucketSamples]) => {

@@ -20,12 +20,12 @@ describe('ContractsController', () => {
       ContractsService,
       | 'deploy'
       | 'deployConfigured'
-      | 'uploadWasmOnly'
       | 'invoke'
       | 'getInfo'
       | 'storeUploadedWasm'
       | 'fetchWasmFromGit'
       | 'fetchWasmFromUrl'
+      | 'getMaxWasmFileSize'
     >
   >;
 
@@ -33,7 +33,6 @@ describe('ContractsController', () => {
     contractsService = {
       deploy: jest.fn().mockResolvedValue({ contractId: 'C123', wasmHash: 'abc', txHash: 'tx' }),
       deployConfigured: jest.fn().mockResolvedValue({ contractId: 'C123', wasmHash: 'abc', txHash: 'tx' }),
-      uploadWasmOnly: jest.fn().mockResolvedValue({ wasmHash: 'abc', size: 10 }),
       invoke: jest.fn().mockResolvedValue({ result: null, txHash: 'tx' }),
       getInfo: jest.fn(),
       storeUploadedWasm: jest.fn().mockResolvedValue({
@@ -58,6 +57,7 @@ describe('ContractsController', () => {
           source: 'url' as const,
         },
       }),
+      getMaxWasmFileSize: jest.fn().mockReturnValue(5 * 1024 * 1024),
     };
 
     const configValues: Record<string, string> = {
@@ -324,6 +324,33 @@ describe('ContractsController', () => {
       const step3Json = step3Res.json();
       expect(step3Json.contractAddress).toBe('C123');
       expect(step3Json.txHash).toBe('tx');
+    });
+
+    it('evicts the oldest session when the wizard session cap is reached', async () => {
+      const wasmBase64 = Buffer.from([0x00, 0x61, 0x73, 0x6d]).toString('base64');
+      let oldestToken = '';
+
+      for (let index = 0; index < 33; index += 1) {
+        const response = await app.getHttpAdapter().getInstance().inject({
+          method: 'POST',
+          url: '/contracts/deploy/wizard',
+          headers: { authorization: `Bearer ${tokenFor(ALLOWED_EMAIL)}` },
+          payload: { step: 1, wasmBase64 },
+        });
+
+        expect(response.statusCode).toBe(201);
+        if (index === 0) oldestToken = response.json().stepToken;
+      }
+
+      const response = await app.getHttpAdapter().getInstance().inject({
+        method: 'POST',
+        url: '/contracts/deploy/wizard',
+        headers: { authorization: `Bearer ${tokenFor(ALLOWED_EMAIL)}` },
+        payload: { step: 2, stepToken: oldestToken },
+      });
+
+      expect(response.statusCode).toBe(400);
+      expect((ContractsController as any).wizardSessions.size).toBeLessThanOrEqual(32);
     });
   });
 

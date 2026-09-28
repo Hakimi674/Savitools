@@ -134,14 +134,6 @@ describe('ContractsService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('uses the shared maxFileSize limit for uploadWasmOnly', async () => {
-      const { service } = await createModule();
-      (service as any).maxFileSize = 8;
-
-      await expect(
-        service.uploadWasmOnly(Buffer.from([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x00])),
-      ).rejects.toThrow(/exceeds maximum size/i);
-    });
   });
 
   describe('getInfo', () => {

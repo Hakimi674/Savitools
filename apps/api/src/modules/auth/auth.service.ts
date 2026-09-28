@@ -43,6 +43,7 @@ import {
   PASSWORD_RESET_TTL_SECONDS,
   PASSWORD_RESET_WINDOW_MS,
   REFRESH_TOKEN_TTL_SECONDS,
+  REFRESH_TOKEN_REUSE_GRACE_MS,
 } from './auth.constants';
 import { CreateVaultKeyDto } from './dto/create-vault-key.dto';
 import { FluxaDto } from './dto/fluxa.dto';
@@ -336,15 +337,23 @@ export class AuthService {
     );
 
     if (claim.affected !== 1) {
-      // The token was already consumed — by a concurrent winner or by a
-      // genuine replay. Either way, a second presentation of a used token
-      // means it may have been captured/duplicated: revoke the whole
-      // family so no descendant token can keep producing sessions.
-      this.logger.warn(`Refresh token reuse detected for family ${stored.familyId}`);
-      await this.refreshTokensRepository.update(
-        { familyId: stored.familyId },
-        { revokedAt: new Date() },
-      );
+      const latest = await this.refreshTokensRepository.findOne({
+        where: { id: stored.id },
+      });
+      const consumedAt = latest?.revokedAt?.getTime();
+      const now = Date.now();
+      const withinGrace =
+        consumedAt !== undefined &&
+        consumedAt <= now &&
+        now - consumedAt <= REFRESH_TOKEN_REUSE_GRACE_MS;
+
+      if (!withinGrace) {
+        this.logger.warn(`Refresh token reuse detected for family ${stored.familyId}`);
+        await this.refreshTokensRepository.update(
+          { familyId: stored.familyId },
+          { revokedAt: new Date() },
+        );
+      }
       throw new UnauthorizedException('INVALID_REFRESH_TOKEN');
     }
 
