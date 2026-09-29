@@ -57,6 +57,13 @@ export class ApiKey {
   @Column({ type: 'jsonb', nullable: true })
   openApiSpec!: Record<string, unknown> | null;
 
+  /**
+   * Precomputed mask (first8...last4) of the decrypted key, stored to avoid
+   * decrypting on every list operation. Computed at save/update time.
+   */
+  @Column({ name: 'key_preview', type: 'varchar', nullable: true })
+  keyPreview!: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 }
