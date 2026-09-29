@@ -3,6 +3,7 @@ import {
   Logger,
   OnModuleDestroy,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -26,6 +27,7 @@ import {
 import { MonitorGateway } from './monitor.gateway';
 import { MonitorRuntimeConfig } from './monitor-runtime.config';
 import { EncryptionService, ENCRYPTION_PURPOSES } from '../../common/encryption.service';
+import { MonitorDigestService } from './monitor-digest.service';
 
 const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
 
@@ -58,6 +60,8 @@ export class NotificationWorkerService
     private readonly userRepository: Repository<User>,
     private readonly gateway: MonitorGateway,
     private readonly encryptionService: EncryptionService,
+    @Optional()
+    private readonly digestService?: MonitorDigestService,
   ) {}
 
   onModuleInit(): void {
@@ -128,13 +132,33 @@ export class NotificationWorkerService
 
     const attempts = [...alertEvent.deliveryAttempts];
     const failures: Error[] = [];
+    let hasHeldChannel = false;
+
     for (const channel of rule.channels) {
       if (
         attempts.some(
           (attempt) =>
-            attempt.channel === channel && attempt.status === 'delivered',
+            attempt.channel === channel &&
+            (attempt.status === 'delivered' || attempt.status === 'held'),
         )
       ) {
+        continue;
+      }
+
+      // Webhooks are never held (webhook path keeps its immediate semantics)
+      const isDigestChannel = channel === 'in_app' || channel === 'email';
+      const shouldHold =
+        isDigestChannel &&
+        this.digestService &&
+        (await this.digestService.shouldHoldAlert(user.id));
+
+      if (shouldHold) {
+        hasHeldChannel = true;
+        this.replaceAttempt(attempts, {
+          channel,
+          status: 'held',
+          attemptedAt: new Date().toISOString(),
+        });
         continue;
       }
 
@@ -160,12 +184,14 @@ export class NotificationWorkerService
 
     alertEvent.deliveryAttempts = attempts;
     alertEvent.deliveryStatus =
-      failures.length === 0
-        ? 'delivered'
-        : this.hasRetriesLeft(job)
+      failures.length > 0
+        ? this.hasRetriesLeft(job)
           ? 'retrying'
-          : 'failed';
-    alertEvent.deliveredAt = failures.length === 0 ? new Date() : null;
+          : 'failed'
+        : hasHeldChannel
+          ? 'held'
+          : 'delivered';
+    alertEvent.deliveredAt = failures.length === 0 && !hasHeldChannel ? new Date() : null;
     await this.alertEventRepository.save(alertEvent);
 
     this.gateway.emitToUser(user.id, 'alert_status', {

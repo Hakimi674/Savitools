@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Delete,
   Body,
   Param,
@@ -27,6 +28,7 @@ import { CurrentUser, AuthUser } from '../auth/decorators/current-user.decorator
 import { MonitorLeaderService } from './monitor-leader.service';
 import { MonitorRuntimeConfig } from './monitor-runtime.config';
 import { StreamManager } from './stream-manager.service';
+import { MonitorDigestService, UpdateDigestPreferencesDto } from './monitor-digest.service';
 
 interface SseClient {
   reply: FastifyReply;
@@ -52,6 +54,7 @@ export class MonitorController implements OnModuleDestroy {
     private readonly runtime: MonitorRuntimeConfig,
     private readonly leader: MonitorLeaderService,
     private readonly streamManager: StreamManager,
+    private readonly digestService: MonitorDigestService,
   ) {
     this.cleanupInterval = setInterval(() => {
       this.disconnectIdleClients();
@@ -244,6 +247,27 @@ export class MonitorController implements OnModuleDestroy {
   @UseGuards(JwtAuthGuard)
   async getWebhook(@CurrentUser() user: AuthUser) {
     return this.monitorService.getWebhook(user.id);
+  }
+
+  @Get('preferences')
+  @UseGuards(JwtAuthGuard)
+  async getPreferences(@CurrentUser() user: AuthUser) {
+    return this.digestService.getPreferences(user.id);
+  }
+
+  @Put('preferences')
+  @UseGuards(JwtAuthGuard)
+  async updatePreferences(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: UpdateDigestPreferencesDto,
+  ) {
+    return this.digestService.updatePreferences(user.id, dto);
+  }
+
+  @Post('digest/flush')
+  @UseGuards(JwtAuthGuard)
+  async flushDigest(@CurrentUser() user: AuthUser) {
+    return this.digestService.flushDigestForUser(user.id);
   }
 
   // ── Search & CSV export (Savitura/Savitools#195) ────────────

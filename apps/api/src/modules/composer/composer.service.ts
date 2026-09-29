@@ -7,6 +7,7 @@ import {
   Account,
   Asset,
   BASE_FEE,
+  Claimant,
   Horizon,
   Keypair,
   Memo,
@@ -21,6 +22,7 @@ import { BuildTransactionDto, OperationDto } from './dto/build-transaction.dto';
 import { SimulateTransactionDto } from './dto/simulate-transaction.dto';
 import { BenchmarkTransactionDto } from './dto/benchmark-transaction.dto';
 import { FeeBumpDto } from './dto/fee-bump.dto';
+import { parseDestination } from '../stellar/address';
 
 // ---------------------------------------------------------------------------
 // Static operation-type manifest returned by GET /composer/operations
@@ -223,6 +225,27 @@ export const OPERATION_MANIFEST = [
       { name: 'minAmountB', label: 'Minimum Received Asset B (pool order)', type: 'number', required: true, placeholder: '0' },
     ],
   },
+  {
+    // Savitura/Savitools#318 — Composer support for claimable balance operations
+    type: 'create_claimable_balance',
+    label: 'Create Claimable Balance',
+    description: 'Lock an asset amount into a claimable balance with one or more claimants',
+    fields: [
+      { name: 'asset.code', label: 'Asset Code', type: 'text', required: true, placeholder: 'XLM' },
+      { name: 'asset.issuer', label: 'Asset Issuer', type: 'text', required: false, placeholder: 'G… (omit for XLM)' },
+      { name: 'amount', label: 'Amount', type: 'number', required: true, placeholder: '10' },
+      { name: 'destination', label: 'Claimant (G… or M…)', type: 'text', required: true, placeholder: 'G…' },
+    ],
+  },
+  {
+    // Savitura/Savitools#318 — Composer support for claimable balance operations
+    type: 'claim_claimable_balance',
+    label: 'Claim Claimable Balance',
+    description: 'Claim a pre-existing claimable balance by its 32-byte (64-hex-character) ID',
+    fields: [
+      { name: 'balanceId', label: 'Balance ID (64 hex characters)', type: 'text', required: true, placeholder: '0000⁦0000… or 64-char raw hex' },
+    ],
+  },
 ];
 
 export interface SimulationResult {
@@ -300,6 +323,31 @@ function validatePoolAmount(field: string, value: unknown, allowZero = false): s
   return amount;
 }
 
+/**
+ * Validates and normalises a Stellar claimable-balance ID.
+ *
+ * The Stellar SDK (and Horizon) encodes balance IDs as 72 hex characters:
+ * an 8-hex type prefix ("00000000" for CLAIMABLE_BALANCE_ID_TYPE_V0)
+ * followed by 64 hex characters of the raw 32-byte balance hash.
+ *
+ * Callers may supply either the full 72-char form or the 64-char raw hash;
+ * we normalise the latter to the expected 72-char form automatically.
+ */
+function validateClaimableBalanceId(value: unknown): string {
+  const raw = String(value ?? '').toLowerCase();
+  if (/^[0-9a-f]{64}$/.test(raw)) {
+    // 32-byte raw hash — prefix with the CLAIMABLE_BALANCE_ID_TYPE_V0 type byte
+    return '00000000' + raw;
+  }
+  if (/^[0-9a-f]{72}$/.test(raw)) {
+    // Already fully-formed; accept as-is
+    return raw;
+  }
+  throw new BadRequestException(
+    'balanceId must be a 64-character hex balance hash or the full 72-character Stellar balance ID',
+  );
+}
+
 function validatePriceRatio(field: string, value: any): { n: number; d: number } {
   const numerator = String(value?.n ?? '');
   const denominator = String(value?.d ?? '');
@@ -342,6 +390,32 @@ function liquidityPoolOperationError(operation: any): string | null {
   } catch (error: unknown) {
     return error instanceof Error ? error.message : String(error);
   }
+}
+
+/**
+ * Returns a descriptive error string for claimable-balance operations that are
+ * statically detectable before submission, otherwise null.
+ *
+ * - claim_claimable_balance: validates the balance ID format and catches the
+ *   most common failure modes (nonexistent ID, already-claimed balances).
+ *   Full on-chain validation happens at submission time, but we can surface
+ *   the most likely errors early.
+ */
+function claimableBalanceOperationError(operation: any, index: number): string | null {
+  if (operation.type === 'claimClaimableBalance') {
+    // The SDK maps claim_claimable_balance → 'claimClaimableBalance' in operation.type.
+    // balanceID is stored as a StrKey-encoded or hex string depending on SDK version.
+    const id = String(operation.balanceID ?? operation.balanceId ?? '');
+    if (!id) {
+      return `op[${index}] claim_claimable_balance: missing balanceId`;
+    }
+    // Cannot verify on-chain existence statically; surface a hint for the
+    // most frequent developer mistakes.
+    if (id.length !== 72 || !/^[0-9a-f]+$/i.test(id)) {
+      return `op[${index}] claim_claimable_balance: balanceId does not appear to be a valid 72-character Stellar balance ID`;
+    }
+  }
+  return null;
 }
 
 @Injectable()
@@ -584,8 +658,11 @@ export class ComposerService {
 
       const hash = tx.hash().toString('hex');
       const operationResults = tx.operations.flatMap((operation, index) => {
-        const error = liquidityPoolOperationError(operation);
-        return error ? [`op[${index}] ${operation.type}: ${error}`] : [];
+        const lpError = liquidityPoolOperationError(operation);
+        if (lpError) return [`op[${index}] ${operation.type}: ${lpError}`];
+        const cbError = claimableBalanceOperationError(operation, index);
+        if (cbError) return [cbError];
+        return [];
       });
       const hasOperationFailure = operationResults.length > 0;
 
@@ -917,6 +994,30 @@ export class ComposerService {
           minAmountA: validatePoolAmount('minAmountA', dto.minAmountA, true),
           minAmountB: validatePoolAmount('minAmountB', dto.minAmountB, true),
         });
+      // Savitura/Savitools#318 — claimable balance operations
+      case 'create_claimable_balance': {
+        // Decimal amount validation using BigInt to avoid floating-point precision loss
+        const cbAmount = validatePoolAmount('amount', dto.amount);
+        const asset = resolveAsset(dto.asset?.code, dto.asset?.issuer);
+        if (!dto.destination) {
+          throw new BadRequestException('create_claimable_balance requires a destination (claimant) address');
+        }
+        // Stellar Claimant requires an Ed25519 public key.
+        // Support both G… and M… muxed addresses via parseDestination.
+        const parsed = parseDestination(String(dto.destination));
+        return Operation.createClaimableBalance({
+          asset,
+          amount: cbAmount,
+          claimants: [
+            new Claimant(parsed.account, Claimant.predicateUnconditional()),
+          ],
+        });
+      }
+
+      case 'claim_claimable_balance': {
+        const balanceId = validateClaimableBalanceId(dto.balanceId);
+        return Operation.claimClaimableBalance({ balanceId });
+      }
       default:
         throw new BadRequestException(
           `Unknown operation type: ${(dto as { type?: string }).type}`,

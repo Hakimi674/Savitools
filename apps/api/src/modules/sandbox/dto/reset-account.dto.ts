@@ -1,7 +1,7 @@
-import { IsString, IsNotEmpty, IsOptional } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
-export class FundDto {
+export class ResetAccountDto {
   @ApiProperty({ description: 'Stellar public key' })
   @IsString()
   @IsNotEmpty()

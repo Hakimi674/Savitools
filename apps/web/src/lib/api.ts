@@ -1133,6 +1133,7 @@ export interface SandboxAccountDetails {
     authRevocable: boolean;
     authImmutable: boolean;
   };
+  network?: string;
 }
 
 export interface SandboxFundResult {
@@ -1141,6 +1142,16 @@ export interface SandboxFundResult {
   txHash: string | null;
   confirmationStatus: string;
   startingBalance: string;
+  network?: string;
+}
+
+export interface SandboxResetResult {
+  publicKey: string;
+  reset: boolean;
+  network: string;
+  startingBalance: string;
+  txHash: string | null;
+  message: string;
 }
 
 export interface SandboxPaymentResult {
@@ -1155,18 +1166,33 @@ export interface SandboxPaymentResult {
   muxedId?: string | null;
   asset: string;
   amount: string;
+  network?: string;
 }
 
-export async function sandboxFund(publicKey: string) {
+export async function sandboxGenerateKeypair(network: string = 'testnet') {
+  return apiFetch<{ publicKey: string; secretKey: string; network: string }>(
+    `/sandbox/keypair?network=${encodeURIComponent(network)}`,
+    { method: "POST" },
+  );
+}
+
+export async function sandboxFund(publicKey: string, network: string = 'testnet') {
   return apiFetch<SandboxFundResult>("/sandbox/fund", {
     method: "POST",
-    body: JSON.stringify({ publicKey }),
+    body: JSON.stringify({ publicKey, network }),
   });
 }
 
-export async function sandboxGetAccount(publicKey: string) {
+export async function sandboxResetAccount(publicKey: string, network: string = 'testnet') {
+  return apiFetch<SandboxResetResult>("/sandbox/reset", {
+    method: "POST",
+    body: JSON.stringify({ publicKey, network }),
+  });
+}
+
+export async function sandboxGetAccount(publicKey: string, network: string = 'testnet') {
   return apiFetch<SandboxAccountDetails>(
-    `/sandbox/account/${encodeURIComponent(publicKey)}`,
+    `/sandbox/account/${encodeURIComponent(publicKey)}?network=${encodeURIComponent(network)}`,
   );
 }
 
@@ -1176,10 +1202,11 @@ export async function sandboxSendPayment(
   asset: string,
   amount: string,
   memo?: string,
+  network: string = 'testnet',
 ) {
   return apiFetch<SandboxPaymentResult>("/sandbox/payment", {
     method: "POST",
-    body: JSON.stringify({ fromSecret, toPublicKey, asset, amount, memo }),
+    body: JSON.stringify({ fromSecret, toPublicKey, asset, amount, memo, network }),
   });
 }
 
