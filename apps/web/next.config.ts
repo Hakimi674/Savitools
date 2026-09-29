@@ -23,7 +23,9 @@ const securityHeaders = [
     key: 'Permissions-Policy',
     value: [
       'accelerometer=()',
-      'camera=()',
+      // `self` so the offline QR handoff can scan frames with the camera
+      // (Savitura/Savitools#344). Everything else stays disabled.
+      'camera=(self)',
       'geolocation=()',
       'gyroscope=()',
       'magnetometer=()',
@@ -77,9 +79,7 @@ const nextConfig: NextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
-  experimental: {
-    turbopack: {},
-  },
+  turbopack: {},
 };
 
 export default nextConfig;

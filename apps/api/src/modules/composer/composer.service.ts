@@ -230,7 +230,7 @@ export interface SimulationResult {
   hash: string;
   fee: string | null;
   resultCodes: string | null;
-  operationResults: unknown | null;
+  operationResults: string[] | null;
   ledger: number | null;
 }
 
@@ -300,27 +300,46 @@ function validatePoolAmount(field: string, value: unknown, allowZero = false): s
   return amount;
 }
 
-function validatePriceRatio(field: string, value: any): { n: number; d: number } {
-  const numerator = String(value?.n ?? '');
-  const denominator = String(value?.d ?? '');
-  if (!/^\d+$/.test(numerator) || !/^\d+$/.test(denominator)) {
-    throw new BadRequestException(`${field} numerator and denominator must be positive integers`);
+/**
+ * Prices arrive in two shapes: `{n, d}` from the composer DTO, and a plain
+ * decimal string when the operation is read back out of an XDR envelope
+ * (stellar-base renders prices as decimals). Both are normalised to an exact
+ * BigInt fraction so the bounds comparison never loses precision.
+ */
+function priceFraction(field: string, value: unknown): { n: bigint; d: bigint } {
+  if (value !== null && typeof value === 'object') {
+    const ratio = value as { n?: unknown; d?: unknown };
+    const numerator = String(ratio.n ?? '');
+    const denominator = String(ratio.d ?? '');
+    if (!/^\d+$/.test(numerator) || !/^\d+$/.test(denominator)) {
+      throw new BadRequestException(`${field} numerator and denominator must be positive integers`);
+    }
+    const n = BigInt(numerator);
+    const d = BigInt(denominator);
+    if (n <= 0n || d <= 0n || n > 2147483647n || d > 2147483647n) {
+      throw new BadRequestException(`${field} numerator and denominator must be positive 32-bit integers`);
+    }
+    return { n, d };
   }
-  const n = BigInt(numerator);
-  const d = BigInt(denominator);
-  if (n <= 0n || d <= 0n || n > 2147483647n || d > 2147483647n) {
-    throw new BadRequestException(`${field} numerator and denominator must be positive 32-bit integers`);
+
+  const decimal = String(value ?? '').trim();
+  if (!/^\d+(?:\.\d+)?$/.test(decimal)) {
+    throw new BadRequestException(`${field} must be a non-negative decimal price`);
   }
-  return { n: Number(n), d: Number(d) };
+  const [whole, fraction = ''] = decimal.split('.');
+  return { n: BigInt(`${whole}${fraction}`), d: 10n ** BigInt(fraction.length) };
 }
 
 function validateLiquidityPoolPriceBounds(dto: any): { minPrice: { n: number; d: number }; maxPrice: { n: number; d: number } } {
-  const minPrice = validatePriceRatio('minPrice', dto.minPrice);
-  const maxPrice = validatePriceRatio('maxPrice', dto.maxPrice);
-  if (BigInt(minPrice.n) * BigInt(maxPrice.d) > BigInt(maxPrice.n) * BigInt(minPrice.d)) {
+  const minPrice = priceFraction('minPrice', dto.minPrice);
+  const maxPrice = priceFraction('maxPrice', dto.maxPrice);
+  if (minPrice.n * maxPrice.d > maxPrice.n * minPrice.d) {
     throw new BadRequestException('minPrice must be less than or equal to maxPrice');
   }
-  return { minPrice, maxPrice };
+  return {
+    minPrice: { n: Number(minPrice.n), d: Number(minPrice.d) },
+    maxPrice: { n: Number(maxPrice.n), d: Number(maxPrice.d) },
+  };
 }
 
 function liquidityPoolOperationError(operation: any): string | null {

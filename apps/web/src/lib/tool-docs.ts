@@ -561,4 +561,136 @@ export const toolDocs: ToolDocs[] = [
       },
     ],
   },
+  {
+    slug: 'rpc',
+    name: 'Soroban RPC Console',
+    href: '/rpc',
+    tagline: 'Call read-only Soroban RPC methods with schema-aware inputs and read the raw JSON-RPC response.',
+    overview: [
+      'The Soroban RPC Console turns the Soroban JSON-RPC surface into a form. The API publishes a catalog of whitelisted, read-only methods together with each method\u2019s parameter schema, and the console renders that schema as typed inputs: hashes get validated as 64 hex characters, limits are enforced before anything is sent, and enum values become dropdowns.',
+      'Every call is proxied by the API, which validates the parameters and then forwards exactly one JSON-RPC request to the configured endpoint. The browser never picks the host, and write methods such as sendTransaction are not exposed.',
+    ],
+    prerequisites: [
+      'A running SaviTools API (the console reads its catalog from /api/v1/soroban-rpc/methods).',
+      'Network access from the API server to the configured Soroban RPC endpoint.',
+      'For mainnet calls, a reachable STELLAR_RPC_PUBLIC_URL (defaults to the public mainnet endpoint).',
+    ],
+    setup: [
+      'Open the console from the home page or go directly to /rpc.',
+      'Pick the network (testnet by default) and the method you want to call.',
+    ],
+    usage: [
+      {
+        title: 'Run a parameter-less method',
+        steps: [
+          'Select getLatestLedger (or getHealth / getNetwork) in the Method dropdown.',
+          'Press Run.',
+          'Read the response in the Result panel; the header shows the method, network, and how long the upstream call took.',
+        ],
+      },
+      {
+        title: 'Run a method with parameters',
+        steps: [
+          'Select a method such as getTransaction or getEvents.',
+          'Fill in the required fields (marked with an asterisk); optional fields can be left blank.',
+          'Use "Load example" to prefill the schema\u2019s documented example values.',
+          'Press Run. Client-side checks catch malformed input before the request is sent; anything that slips through is rejected by the API with a message naming the parameter.',
+          'If the RPC server answers with a JSON-RPC error, it is shown verbatim in the red panel so codes and messages stay copy-pasteable.',
+        ],
+      },
+      {
+        title: 'Copy a response into an issue',
+        steps: [
+          'Select the JSON in the output panel and copy it, or use your browser\u2019s copy shortcut.',
+          'The panel shows result and error objects exactly as they came back, without reformatting values.',
+        ],
+      },
+    ],
+    troubleshooting: [
+      {
+        issue: '"Unknown Soroban RPC method \"x\""',
+        cause: 'The console only forwards methods in its read-only catalog.',
+        fix: 'Choose a method from the dropdown; sendTransaction and other write methods are intentionally unavailable.',
+      },
+      {
+        issue: '"Could not reach the Soroban RPC endpoint"',
+        cause: 'The API server cannot connect to STELLAR_RPC_URL / STELLAR_RPC_PUBLIC_URL, or the endpoint timed out.',
+        fix: 'Check that the configured endpoint is reachable from the API host and responds within 15 seconds.',
+      },
+      {
+        issue: 'Parameter errors such as "must match 64 hexadecimal characters"',
+        cause: 'The value does not satisfy the method schema.',
+        fix: 'Correct the highlighted field; the message names the exact parameter that failed.',
+      },
+    ],
+  },
+  {
+    slug: 'qr-handoff',
+    name: 'QR Handoff',
+    href: '/qr-handoff',
+    tagline: 'Move an unsigned or partially signed transaction across an air gap with checksummed animated QR frames.',
+    overview: [
+      'QR Handoff turns a base64 transaction envelope into a short animation of versioned QR frames. Every frame carries its index, the total frame count, the network, and two CRC32 checksums \u2014 one for the chunk and one for the complete payload \u2014 so the receiving device can scan frames out of order, drop duplicates, and refuse anything corrupt or from another session.',
+      'Before an import is accepted the tool decodes the envelope and shows the network, source account, sequence, fee, operation count and signature count. A body that matches the transaction you already loaded is merged (new signatures are highlighted); a body that changed is blocked until you explicitly confirm the replacement.',
+    ],
+    prerequisites: [
+      'A transaction envelope (base64 XDR) produced by the Composer, the SDK, or your own app.',
+      'A camera for scanning \u2014 or, when camera access is unavailable, the paste and file fallbacks.',
+      'Both devices agree on the network (testnet or mainnet); frames from the other network are refused.',
+    ],
+    setup: [
+      'Open QR Handoff from the home page or go directly to /qr-handoff.',
+      'Select the network the transaction was built for.',
+      'Paste the transaction XDR into the Transaction XDR box.',
+    ],
+    usage: [
+      {
+        title: 'Export frames',
+        steps: [
+          'Press "Generate frames". The animation cycles through the frames; pause it if the scanner needs a single code to hold still.',
+          'The status line under the frame shows the frame index, the session id, and the payload checksum.',
+          'On the receiving device press "Start camera" and point it at the animation.',
+          'Progress shows how many frames have arrived; duplicates and invalid frames are reported without losing what was already scanned.',
+        ],
+      },
+      {
+        title: 'Review and accept an import',
+        steps: [
+          'When the last frame arrives and the checksum verifies, the preview panel opens with network, source, sequence, fee, operations, signatures and hash.',
+          'If you already have a transaction loaded, the signature diff tells you whether signatures were added or the body changed.',
+          'Press "Merge signatures" to keep your transaction and adopt the new signatures, or "Import transaction" when nothing is loaded.',
+          'A changed body stays blocked until you tick the replace confirmation, then the button becomes "Replace transaction".',
+        ],
+      },
+      {
+        title: 'Hand off without a camera',
+        steps: [
+          'Use "Copy XDR" or "Download file" to move the envelope by another channel.',
+          'On the receiving side use the paste box or "Load file" \u2014 both run the same preview and validation as a scan.',
+        ],
+      },
+    ],
+    troubleshooting: [
+      {
+        issue: '"Camera permission was denied or no camera is available"',
+        cause: 'The browser blocked getUserMedia, the page is not in a secure context, or no camera exists.',
+        fix: 'Use the paste or file import below the video \u2014 it accepts the same transaction and runs the same checks.',
+      },
+      {
+        issue: '"Frame checksum failed"',
+        cause: 'The scanned frame was corrupted in transit or is not one of this session\u2019s frames.',
+        fix: 'Keep scanning; the frames already collected are kept. Point the camera at a single paused frame if it keeps failing.',
+      },
+      {
+        issue: '"Frames are for mainnet, but this handoff is on testnet"',
+        cause: 'The two sides selected different networks, so the session id does not match.',
+        fix: 'Set the same network on both devices and start over with Reset scan.',
+      },
+      {
+        issue: '"The imported envelope changes the transaction body"',
+        cause: 'The incoming XDR differs from the one loaded locally (amount, destination, memo, fee \u2026).',
+        fix: 'Confirm the details, then tick the replace confirmation if the change is intended.',
+      },
+    ],
+  },
 ];

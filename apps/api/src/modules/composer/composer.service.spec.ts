@@ -117,9 +117,9 @@ describe('ComposerService', () => {
       expect(operation.type).toBe('liquidityPoolDeposit');
       expect(operation.liquidityPoolId).toBe(poolId);
       expect(operation.maxAmountA).toBe('1.0000000');
-      expect(operation.maxAmountB).toBe('2');
-      expect(operation.minPrice).toEqual({ n: 1, d: 2 });
-      expect(operation.maxPrice).toEqual({ n: 2, d: 1 });
+      expect(operation.maxAmountB).toBe('2.0000000');
+      expect(operation.minPrice).toBe('0.5');
+      expect(operation.maxPrice).toBe('2');
     });
 
     it('builds a liquidity-pool withdrawal with canonical A/B minimums', async () => {
@@ -142,7 +142,7 @@ describe('ComposerService', () => {
       expect(operation.type).toBe('liquidityPoolWithdraw');
       expect(operation.liquidityPoolId).toBe(poolId);
       expect(operation.amount).toBe('3.0000000');
-      expect(operation.minAmountA).toBe('0');
+      expect(operation.minAmountA).toBe('0.0000000');
       expect(operation.minAmountB).toBe('1.2500000');
     });
 
@@ -501,7 +501,7 @@ describe('ComposerService', () => {
 
     it('returns a hash for valid XDR without submitting', async () => {
       const xdr = buildTestXdr();
-      const expectedHash = new (require('@stellar/stellar-sdk').Transaction)(
+      const expectedHash = new Transaction(
         xdr,
         Networks.TESTNET,
       )

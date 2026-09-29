@@ -2,7 +2,7 @@ import { UnauthorizedException } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { WebhookController } from './webhook.controller';
 
-function guardNames(handler: Function): string[] {
+function guardNames(handler: (...args: unknown[]) => unknown): string[] {
   const guards = Reflect.getMetadata('__guards__', handler) as Array<new () => unknown>;
   return (guards ?? []).map((guard) => guard.name);
 }

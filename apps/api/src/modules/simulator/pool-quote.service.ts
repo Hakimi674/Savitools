@@ -5,7 +5,6 @@ import {
   WithdrawalResult,
   formatPoolFee,
   fromStroops,
-  parseHorizonFee,
   quoteDeposit,
   quoteWithdrawal,
   toStroops,

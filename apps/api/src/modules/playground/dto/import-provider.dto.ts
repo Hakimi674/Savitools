@@ -1,6 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEnum, IsString, IsObject, MinLength } from 'class-validator';
-import { ApiKeyProvider } from '../entities/api-key.entity';
+import { IsString, IsObject, MinLength } from 'class-validator';
 
 export class ImportProviderDto {
   @ApiProperty({ description: 'Name/label for the provider' })

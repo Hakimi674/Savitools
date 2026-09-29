@@ -164,15 +164,6 @@ describe('AuthService', () => {
       emailVerified: true,
       passwordHash,
     });
-    const clientDataJSON = (challenge: string) =>
-      Buffer.from(
-        JSON.stringify({
-          type: 'webauthn.create',
-          challenge,
-          origin: 'http://localhost:3000',
-        }),
-      ).toString('base64url');
-
     it('requires a valid reauthentication grant to register', async () => {
       usersRepo.findOne.mockResolvedValue(user());
       const grant = await service.requestPasskeyReauth(user().id, 'password123');
@@ -771,7 +762,6 @@ describe('AuthService', () => {
 
   describe('refresh', () => {
     it('rotates tokens and atomically consumes the old one', async () => {
-      const { createHash } = require('crypto');
       const rawToken = 'raw-refresh-token';
       const tokenHash = createHash('sha256').update(rawToken).digest('hex');
 
@@ -798,7 +788,6 @@ describe('AuthService', () => {
     });
 
     it('throws INVALID_REFRESH_TOKEN for expired token', async () => {
-      const { createHash } = require('crypto');
       const rawToken = 'expired-token';
       const tokenHash = createHash('sha256').update(rawToken).digest('hex');
 
@@ -821,7 +810,6 @@ describe('AuthService', () => {
 
     describe('with a real token store', () => {
       function setup(rawToken: string, familyId = 'fam-1') {
-        const { createHash } = require('crypto');
         const tokenHash = createHash('sha256').update(rawToken).digest('hex');
         const table = fakeRefreshTokenTable([
           {

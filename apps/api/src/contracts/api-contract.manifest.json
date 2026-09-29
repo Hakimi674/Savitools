@@ -519,6 +519,21 @@
     },
     {
       "method": "POST",
+      "path": "/api/v1/soroban-rpc/execute",
+      "auth": "public"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/soroban-rpc/methods",
+      "auth": "public"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/soroban-rpc/methods/:method",
+      "auth": "public"
+    },
+    {
+      "method": "POST",
       "path": "/api/v1/transaction/graph",
       "auth": "jwt"
     },
