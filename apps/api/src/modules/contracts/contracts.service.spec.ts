@@ -236,7 +236,7 @@ describe('ContractsService', () => {
       sparseArtifact = null;
       execFileMock.mockReset();
       execFileMock.mockImplementation(
-        (cmd: string, args: string[], opts?: { cwd?: string }, callback?: (error?: Error | null) => void) => {
+        (cmd: string, args: string[], opts: { cwd?: string }, callback?: (error: Error | null, stdout: Buffer | string, stderr: Buffer | string) => void) => {
           if (cmd !== 'git') throw new Error('unexpected command');
           if (args[0] === 'sparse-checkout' && args[1] === 'set') {
             sparseArtifact = args[2] as string;
@@ -285,9 +285,22 @@ describe('ContractsService', () => {
 
     it('serves concurrent fetches without blocking the event loop while cloning', async () => {
       const { service } = await createModule();
+      // Same checkout simulation as `simulateGitCheckout`, but each git call
+      // resolves asynchronously after 50ms to prove the event loop is not
+      // blocked while clones run.
+      const writtenArtifacts = new Set<string>();
       execFileMock.mockImplementation(
-        (_cmd: string, _args: string[], _opts: { cwd?: string }, callback?: (error?: Error | null) => void) => {
+        (_cmd: string, args: string[], opts: { cwd?: string }, callback?: (error: Error | null, stdout: Buffer | string, stderr: Buffer | string) => void) => {
           setTimeout(() => {
+            if (args[0] === 'sparse-checkout' && args[1] === 'set') {
+              writtenArtifacts.add(args[2] as string);
+            }
+            if (args[0] === 'checkout' && opts?.cwd) {
+              for (const artifact of writtenArtifacts) {
+                fs.mkdirSync(nodePath.join(opts.cwd, nodePath.dirname(artifact)), { recursive: true });
+                fs.writeFileSync(nodePath.join(opts.cwd, artifact), Buffer.from('wasm-bytes'));
+              }
+            }
             if (callback) callback(null, Buffer.alloc(0), Buffer.alloc(0));
           }, 50);
           return undefined;

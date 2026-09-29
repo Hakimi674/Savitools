@@ -5,6 +5,7 @@ import { ComposerService } from './composer.service';
 import { TransactionSequenceService } from './transaction-sequence.service';
 import { BuildTransactionDto } from './dto/build-transaction.dto';
 import { FeeBumpDto } from './dto/fee-bump.dto';
+import { FeeBumpInspectDto } from './dto/fee-bump-inspect.dto';
 import { SimulateTransactionDto } from './dto/simulate-transaction.dto';
 import { BenchmarkTransactionDto } from './dto/benchmark-transaction.dto';
 import { RunTransactionSequenceDto } from './dto/transaction-sequence.dto';
@@ -39,6 +40,17 @@ export class ComposerController {
   @ApiResponse({ status: 400, description: 'Invalid inner XDR, fee source, fee bounds, or network mismatch' })
   async buildFeeBump(@Body() dto: FeeBumpDto) {
     return this.composerService.buildFeeBump(dto);
+  }
+
+  @Post('fee-bump/inspect')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Decode a fee-bump envelope and describe its inner and outer layers',
+  })
+  @ApiResponse({ status: 200, description: 'Both envelope layers decoded' })
+  @ApiResponse({ status: 400, description: 'Not a fee-bump envelope or invalid XDR' })
+  async inspectFeeBump(@Body() dto: FeeBumpInspectDto) {
+    return this.composerService.inspectFeeBump(dto);
   }
 
   @Post('simulate')

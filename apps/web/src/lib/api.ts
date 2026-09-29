@@ -1532,6 +1532,50 @@ export async function previewTransferLink(input: {
   );
 }
 
+/* ─── Federation server diagnostics (Savitura/Savitools#341) ────────────── */
+
+export type DiagnosticStageName =
+  | "toml"
+  | "http"
+  | "forward-lookup"
+  | "reverse-lookup";
+
+export type DiagnosticFailureKind =
+  | "dns"
+  | "toml"
+  | "tls"
+  | "http"
+  | "timeout"
+  | "schema"
+  | "ssrf";
+
+export interface DiagnosticStage {
+  stage: DiagnosticStageName;
+  ok: boolean;
+  latencyMs?: number;
+  error?: DiagnosticFailureKind;
+  details: Record<string, unknown>;
+  redirectChain?: string[];
+}
+
+export interface FederationDiagnosticsReport {
+  domain: string;
+  checkedAt: string;
+  ok: boolean;
+  totalLatencyMs: number;
+  serverUrl?: string;
+  serverStatus?: number | null;
+  forwardStatus?: number | null;
+  stages: DiagnosticStage[];
+  failures: DiagnosticFailureKind[];
+}
+
+export async function fetchFederationDiagnostics(domain: string) {
+  return apiFetch<FederationDiagnosticsReport>(
+    `/federation/diagnostics?domain=${encodeURIComponent(domain)}`,
+  );
+}
+
 /* ─── Account Relationship Graph ───────────────────────────────────────── */
 
 export type GraphMode = "signers" | "offers" | "payments" | "all";

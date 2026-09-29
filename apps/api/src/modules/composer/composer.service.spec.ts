@@ -3,11 +3,13 @@ import { BadRequestException } from '@nestjs/common';
 import { ComposerService } from './composer.service';
 import {
   Account,
+  Address,
   Asset,
   Horizon,
   Keypair,
   Networks,
   Operation,
+  SorobanDataBuilder,
   Transaction,
   TransactionBuilder,
   xdr,
@@ -116,10 +118,12 @@ describe('ComposerService', () => {
       const operation = new Transaction(result.xdr, Networks.TESTNET).operations[0] as any;
       expect(operation.type).toBe('liquidityPoolDeposit');
       expect(operation.liquidityPoolId).toBe(poolId);
+      // XDR amounts always decode back as 7-decimal strings.
       expect(operation.maxAmountA).toBe('1.0000000');
-      expect(operation.maxAmountB).toBe('2');
-      expect(operation.minPrice).toEqual({ n: 1, d: 2 });
-      expect(operation.maxPrice).toEqual({ n: 2, d: 1 });
+      expect(operation.maxAmountB).toBe('2.0000000');
+      // XDR prices decode back as reduced n/d decimal strings.
+      expect(Number(operation.minPrice)).toBe(0.5);
+      expect(Number(operation.maxPrice)).toBe(2);
     });
 
     it('builds a liquidity-pool withdrawal with canonical A/B minimums', async () => {
@@ -141,8 +145,9 @@ describe('ComposerService', () => {
       const operation = new Transaction(result.xdr, Networks.TESTNET).operations[0] as any;
       expect(operation.type).toBe('liquidityPoolWithdraw');
       expect(operation.liquidityPoolId).toBe(poolId);
+      // XDR amounts always decode back as 7-decimal strings.
       expect(operation.amount).toBe('3.0000000');
-      expect(operation.minAmountA).toBe('0');
+      expect(operation.minAmountA).toBe('0.0000000');
       expect(operation.minAmountB).toBe('1.2500000');
     });
 
@@ -468,6 +473,142 @@ describe('ComposerService', () => {
     });
   });
 
+  describe('inspectFeeBump (#340)', () => {
+    const feeSource = Keypair.random();
+
+    function buildSignedInnerXdr(): string {
+      const keypair = Keypair.random();
+      const account = new Account(keypair.publicKey(), '1');
+      const tx = new TransactionBuilder(account, {
+        networkPassphrase: Networks.TESTNET,
+        fee: '200',
+      })
+        .addOperation(
+          Operation.payment({
+            destination: keypair.publicKey(),
+            asset: Asset.native(),
+            amount: '1',
+          }),
+        )
+        .setTimeout(30);
+      const transaction = tx.build();
+      transaction.sign(keypair);
+      return transaction.toEnvelope().toXDR('base64');
+    }
+
+    function buildFeeBumpedXdr(): string {
+      const inner = new Transaction(buildSignedInnerXdr(), Networks.TESTNET);
+      const feeBump = TransactionBuilder.buildFeeBumpTransaction(
+        feeSource.publicKey(),
+        '5000',
+        inner,
+        Networks.TESTNET,
+      );
+      return feeBump.toEnvelope().toXDR('base64');
+    }
+
+    it('decodes both layers of a wrapped classic transaction', async () => {
+      const inner = new Transaction(buildSignedInnerXdr(), Networks.TESTNET);
+      const feeBump = TransactionBuilder.buildFeeBumpTransaction(
+        feeSource.publicKey(),
+        '5000',
+        inner,
+        Networks.TESTNET,
+      );
+      const result = await service.inspectFeeBump({
+        innerXdr: feeBump.toEnvelope().toXDR('base64'),
+      });
+
+      expect(result.type).toBe('fee_bump');
+      expect(result.feeSource).toBe(feeSource.publicKey());
+      expect(result.effectiveFee).toBe(BigInt(feeBump.fee).toString());
+      expect(BigInt(result.effectiveFee)).toBeGreaterThanOrEqual(
+        BigInt(result.networkMinimumFee),
+      );
+      expect(result.inner.operationCount).toBe(1);
+      expect(result.inner.isSoroban).toBe(false);
+      expect(result.inner.operations).toEqual(['payment']);
+      expect(result.inner.signatures).toHaveLength(1);
+      expect(result.outerSignatures).toHaveLength(0);
+      expect(result.hash).toMatch(/^[0-9a-f]{64}$/);
+      expect(result.inner.source).toMatch(/^G[A-Z2-7]{55}$/);
+    });
+
+    it('preserves existing inner signatures byte-for-byte through a wrap/inspect round trip', async () => {
+      const inner = new Transaction(buildSignedInnerXdr(), Networks.TESTNET);
+      const originalSignature = inner.signatures[0].toXDR('base64');
+
+      const feeBump = TransactionBuilder.buildFeeBumpTransaction(
+        feeSource.publicKey(),
+        '5000',
+        inner,
+        Networks.TESTNET,
+      );
+      const result = await service.inspectFeeBump({
+        innerXdr: feeBump.toEnvelope().toXDR('base64'),
+      });
+
+      expect(result.inner.signatures).toHaveLength(1);
+      const reportedSig = result.inner.signatures[0];
+      const reconstructed = new xdr.DecoratedSignature({
+        hint: Buffer.from(reportedSig.publicKeyHint, 'hex'),
+        signature: Buffer.from(reportedSig.signature, 'base64'),
+      });
+      expect(reconstructed.toXDR('base64')).toBe(originalSignature);
+      expect(result.inner.signatureVerifications[0]).toBe(true);
+    });
+
+    it('reports the network minimum fee and Soroban flag for a Soroban inner transaction', async () => {
+      const keypair = Keypair.random();
+      const account = new Account(keypair.publicKey(), '1');
+      const contractId = 'CA3D5KRYM6CB7OWQ6TWYRR3Z4T7GNZLKERYNZGGA5SOAOPIFY6YQGAXE';
+      const hostFn = xdr.HostFunction.hostFunctionTypeInvokeContract(
+        new xdr.InvokeContractArgs({
+          contractAddress: new Address(contractId).toScAddress(),
+          functionName: 'hello',
+          args: [],
+        }),
+      );
+      const tx = new TransactionBuilder(account, {
+        networkPassphrase: Networks.TESTNET,
+        fee: '100',
+      })
+        .setSorobanData(new SorobanDataBuilder().build())
+        .addOperation(Operation.invokeHostFunction({ func: hostFn }))
+        .setTimeout(30)
+        .build();
+      tx.sign(keypair);
+
+      const feeBump = TransactionBuilder.buildFeeBumpTransaction(
+        feeSource.publicKey(),
+        '5000',
+        tx,
+        Networks.TESTNET,
+      );
+      const result = await service.inspectFeeBump({
+        innerXdr: feeBump.toEnvelope().toXDR('base64'),
+      });
+
+      expect(result.inner.isSoroban).toBe(true);
+      expect(result.inner.operations).toEqual(['invokeHostFunction']);
+      expect(BigInt(result.networkMinimumFee)).toBe(
+        BigInt(result.inner.fee) + 100n,
+      );
+    });
+
+    it('rejects a plain classic envelope', async () => {
+      await expect(
+        service.inspectFeeBump({ innerXdr: buildSignedInnerXdr() }),
+      ).rejects.toThrow('not a fee-bump');
+    });
+
+    it('rejects malformed XDR with an actionable error', async () => {
+      await expect(
+        service.inspectFeeBump({ innerXdr: 'not-a-valid-xdr!!!' }),
+      ).rejects.toThrow('Invalid transaction XDR');
+    });
+  });
+
   describe('simulateTransaction', () => {
     it('reports an invalid liquidity-pool price bound by operation without broadcasting', async () => {
       const keypair = Keypair.random();
@@ -493,8 +634,9 @@ describe('ComposerService', () => {
 
       expect(result.success).toBe(false);
       expect(result.resultCodes).toBe('tx_failed');
-      expect(result.operationResults?.[0]).toContain('op[0] liquidityPoolDeposit');
-      expect(result.operationResults?.[0]).toContain('minPrice must be less than or equal to maxPrice');
+      const opResults = result.operationResults as unknown as string[];
+      expect(opResults[0]).toContain('op[0] liquidityPoolDeposit');
+      expect(opResults[0]).toContain('minPrice must be less than or equal to maxPrice');
       expect(submitSpy).not.toHaveBeenCalled();
       submitSpy.mockRestore();
     });

@@ -133,6 +133,11 @@
       "auth": "public"
     },
     {
+      "method": "POST",
+      "path": "/api/v1/composer/fee-bump/inspect",
+      "auth": "public"
+    },
+    {
       "method": "GET",
       "path": "/api/v1/composer/operations",
       "auth": "public"
@@ -206,6 +211,11 @@
       "method": "POST",
       "path": "/api/v1/contracts/wasm/upload",
       "auth": "admin"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/federation/diagnostics",
+      "auth": "public"
     },
     {
       "method": "GET",

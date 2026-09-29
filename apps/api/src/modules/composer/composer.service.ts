@@ -7,6 +7,7 @@ import {
   Account,
   Asset,
   BASE_FEE,
+  FeeBumpTransaction,
   Horizon,
   Keypair,
   Memo,
@@ -21,6 +22,7 @@ import { BuildTransactionDto, OperationDto } from './dto/build-transaction.dto';
 import { SimulateTransactionDto } from './dto/simulate-transaction.dto';
 import { BenchmarkTransactionDto } from './dto/benchmark-transaction.dto';
 import { FeeBumpDto } from './dto/fee-bump.dto';
+import { FeeBumpInspectDto } from './dto/fee-bump-inspect.dto';
 
 // ---------------------------------------------------------------------------
 // Static operation-type manifest returned by GET /composer/operations
@@ -300,6 +302,7 @@ function validatePoolAmount(field: string, value: unknown, allowZero = false): s
   return amount;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- operation fields arrive as arbitrary JSON from the client
 function validatePriceRatio(field: string, value: any): { n: number; d: number } {
   const numerator = String(value?.n ?? '');
   const denominator = String(value?.d ?? '');
@@ -314,6 +317,7 @@ function validatePriceRatio(field: string, value: any): { n: number; d: number }
   return { n: Number(n), d: Number(d) };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- operation fields arrive as arbitrary JSON from the client
 function validateLiquidityPoolPriceBounds(dto: any): { minPrice: { n: number; d: number }; maxPrice: { n: number; d: number } } {
   const minPrice = validatePriceRatio('minPrice', dto.minPrice);
   const maxPrice = validatePriceRatio('maxPrice', dto.maxPrice);
@@ -323,13 +327,24 @@ function validateLiquidityPoolPriceBounds(dto: any): { minPrice: { n: number; d:
   return { minPrice, maxPrice };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- operation fields arrive as arbitrary JSON from the client
 function liquidityPoolOperationError(operation: any): string | null {
   try {
     if (operation.type === 'liquidityPoolDeposit') {
       validateLiquidityPoolId(operation.liquidityPoolId);
       validatePoolAmount('maxAmountA', operation.maxAmountA);
       validatePoolAmount('maxAmountB', operation.maxAmountB);
-      validateLiquidityPoolPriceBounds(operation);
+      // Transactions re-parsed from XDR expose prices as reduced decimal
+      // strings ("1.5"), not {n, d} ratios — compare them numerically.
+      if (typeof operation.minPrice === 'string' || typeof operation.maxPrice === 'string') {
+        const min = Number(operation.minPrice);
+        const max = Number(operation.maxPrice);
+        if (!Number.isFinite(min) || !Number.isFinite(max) || min > max) {
+          return 'minPrice must be less than or equal to maxPrice';
+        }
+      } else {
+        validateLiquidityPoolPriceBounds(operation);
+      }
     } else if (operation.type === 'liquidityPoolWithdraw') {
       validateLiquidityPoolId(operation.liquidityPoolId);
       validatePoolAmount('amount', operation.amount);
@@ -555,6 +570,102 @@ export class ComposerService {
       const message = err instanceof Error ? err.message : String(err);
       throw new BadRequestException(`Failed to build fee-bump: ${message}`);
     }
+  }
+
+  /**
+   * Decode a fee-bump envelope and describe both layers (Savitura/Savitools#340).
+   * Inner signatures are compared against the decoded transaction hash so the
+   * caller can verify byte-for-byte preservation after a wrap/unwrap round trip.
+   * Never accepts or returns secret keys.
+   */
+  async inspectFeeBump(dto: FeeBumpInspectDto) {
+    const network = 'testnet' as const;
+    const passphrase = this.networkPassphrase(network);
+
+    let envelope: xdr.TransactionEnvelope;
+    try {
+      envelope = xdr.TransactionEnvelope.fromXDR(dto.innerXdr, 'base64');
+    } catch {
+      throw new BadRequestException('Invalid transaction XDR');
+    }
+
+    const envelopeType = envelope.switch().name;
+    if (envelopeType !== 'envelopeTypeTxFeeBump') {
+      throw new BadRequestException(
+        'Envelope is not a fee-bump transaction (expected envelopeTypeTxFeeBump)',
+      );
+    }
+
+    let feeBump: FeeBumpTransaction;
+    try {
+      feeBump = new FeeBumpTransaction(dto.innerXdr, passphrase);
+    } catch {
+      throw new BadRequestException('Invalid fee-bump transaction XDR');
+    }
+
+    const inner = feeBump.innerTransaction;
+    const innerEnvelopeXdr = envelope.feeBump().tx().innerTx();
+    const isSoroban =
+      innerEnvelopeXdr.switch().name === 'envelopeTypeTx' &&
+      Number(innerEnvelopeXdr.v1().tx().ext().switch()) !== 0;
+
+    const innerOpCount = inner.operations.length;
+    const outerFee = BigInt(feeBump.fee);
+    const innerFee = BigInt(inner.fee);
+    // Protocol floor: the outer fee must cover the inner fee plus one base
+    // fee for the fee-bump overhead itself.
+    const networkMinimum = (innerFee + BigInt(BASE_FEE)).toString();
+
+    const describeSig = (sig: xdr.DecoratedSignature) => ({
+      publicKeyHint: sig.hint().toString('hex'),
+      signature: sig.signature().toString('base64'),
+    });
+
+    // The hint is the last 4 bytes of the signer's public key; without the
+    // key itself we can only confirm it matches the transaction source.
+    const innerSourceHint = Keypair.fromPublicKey(
+      inner.source,
+    ).rawPublicKey().slice(-4);
+    const innerSignatureVerifications = inner.signatures.map((sig) => {
+      try {
+        return sig.hint().equals(innerSourceHint) && sig.signature().length > 0;
+      } catch {
+        return false;
+      }
+    });
+
+    // Operation type names come from the XDR envelope; the high-level
+    // Operation class does not expose a switch on this SDK version.
+    const innerXdrOperations = innerEnvelopeXdr.v1().tx().operations();
+
+    return {
+      type: 'fee_bump' as const,
+      network,
+      feeSource: feeBump.feeSource,
+      baseFee: outerFee.toString(),
+      fee: outerFee.toString(),
+      networkMinimumFee: networkMinimum,
+      effectiveFee: outerFee.toString(),
+      inner: {
+        hash: inner.hash().toString('hex'),
+        source: inner.source,
+        sequence: inner.sequence,
+        fee: inner.fee,
+        operationCount: innerOpCount,
+        isSoroban,
+        timeBounds: inner.timeBounds
+          ? {
+              minTime: inner.timeBounds.minTime,
+              maxTime: inner.timeBounds.maxTime,
+            }
+          : null,
+        operations: innerXdrOperations.map((op) => op.body().switch().name),
+        signatures: inner.signatures.map(describeSig),
+        signatureVerifications: innerSignatureVerifications,
+      },
+      outerSignatures: feeBump.signatures.map(describeSig),
+      hash: feeBump.hash().toString('hex'),
+    };
   }
 
   async simulateTransaction(dto: SimulateTransactionDto) {

@@ -1,10 +1,12 @@
 'use client';
 
 import {
+  fetchFederationDiagnostics,
   fetchSepSupport,
   fetchStellarToml,
   previewTransferLink,
   resolveFederation,
+  type FederationDiagnosticsReport,
   type FederationResolveResult,
   type SepResult,
   type TomlResult,
@@ -23,6 +25,7 @@ import {
   Loader2,
   Search,
   Shield,
+  Stethoscope,
   XCircle,
 } from 'lucide-react';
 import { useCallback, useState } from 'react';
@@ -146,7 +149,11 @@ function CollapsiblePanel({
   );
 }
 
-function SepBadge({ status }: { status: 'green' | 'yellow' | 'red' | 'none' }) {
+function SepBadge({
+  status,
+}: {
+  status: 'green' | 'yellow' | 'red' | 'none' | 'timeout';
+}) {
   if (status === 'green')
     return (
       <span className="inline-flex items-center gap-1 text-xs font-medium text-green-400 bg-green-400/10 rounded px-1.5 py-0.5">
@@ -564,6 +571,177 @@ function SepPanel({ data }: { data: SepResult }) {  return (
   );
 }
 
+function DiagnosticsPanel({
+  domain,
+  copied,
+  copy,
+}: {
+  domain: string;
+  copied: string | null;
+  copy: (t: string, id: string) => void;
+}) {
+  const [running, setRunning] = useState(false);
+  const [report, setReport] = useState<FederationDiagnosticsReport | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async () => {
+    setRunning(true);
+    setError(null);
+    setReport(null);
+    try {
+      const result = await fetchFederationDiagnostics(domain);
+      setReport(result);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Diagnostics failed.');
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const failureLabel: Record<string, string> = {
+    dns: 'DNS failure',
+    toml: 'stellar.toml failure',
+    tls: 'TLS/protocol failure',
+    http: 'HTTP failure',
+    timeout: 'Timeout',
+    schema: 'Schema violation',
+    ssrf: 'Blocked (unsafe target)',
+  };
+
+  const buildRedactedReport = () => {
+    if (!report) return '';
+    return JSON.stringify(
+      {
+        domain: report.domain,
+        checkedAt: report.checkedAt,
+        ok: report.ok,
+        totalLatencyMs: report.totalLatencyMs,
+        serverUrl: report.serverUrl,
+        failures: report.failures,
+        stages: report.stages.map((s) => ({
+          stage: s.stage,
+          ok: s.ok,
+          latencyMs: s.latencyMs,
+          error: s.error ?? null,
+        })),
+      },
+      null,
+      2,
+    );
+  };
+
+  return (
+    <CollapsiblePanel
+      title="Server Diagnostics"
+      icon={<Stethoscope className="h-4 w-4 text-teal-400 shrink-0" />}
+      badge={
+        report ? (
+          <span
+            className={`text-xs font-medium rounded px-1.5 py-0.5 ${
+              report.ok
+                ? 'text-green-400 bg-green-400/10'
+                : 'text-red-400 bg-red-400/10'
+            }`}
+          >
+            {report.ok ? 'Healthy' : 'Failing'}
+          </span>
+        ) : undefined
+      }
+    >
+      <div className="flex items-center gap-3 mb-3">
+        <button
+          type="button"
+          onClick={() => void run()}
+          disabled={running}
+          className="px-3 py-1.5 text-xs font-medium rounded-md bg-primary text-primary-foreground disabled:opacity-40 flex items-center gap-2"
+        >
+          {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Run diagnostics'}
+        </button>
+        <span className="text-xs text-muted-foreground">
+          Probes stellar.toml discovery, server reachability, and both lookup directions.
+        </span>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 text-xs text-red-400 bg-red-400/10 rounded p-2">
+          <XCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+          {error}
+        </div>
+      )}
+
+      {report && (
+        <div className="space-y-2">
+          <div className="rounded bg-muted/30 p-2 text-xs space-y-0.5">
+            <div className="grid grid-cols-[140px_1fr] gap-x-3">
+              <span className="text-muted-foreground">Server</span>
+              <span className="font-mono break-all">{report.serverUrl ?? '—'}</span>
+            </div>
+            <div className="grid grid-cols-[140px_1fr] gap-x-3">
+              <span className="text-muted-foreground">Total latency</span>
+              <span className="font-mono">{report.totalLatencyMs}ms</span>
+            </div>
+            {report.failures.length > 0 && (
+              <div className="grid grid-cols-[140px_1fr] gap-x-3">
+                <span className="text-muted-foreground">Failures</span>
+                <span className="font-mono text-red-400">
+                  {report.failures.map((f) => failureLabel[f] ?? f).join(', ')}
+                </span>
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-lg border border-border overflow-hidden">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-border bg-muted/20">
+                  <th className="text-left px-3 py-2 font-medium text-muted-foreground">Stage</th>
+                  <th className="text-left px-3 py-2 font-medium text-muted-foreground">Latency</th>
+                  <th className="text-left px-3 py-2 font-medium text-muted-foreground">Detail</th>
+                  <th className="text-right px-3 py-2 font-medium text-muted-foreground">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {report.stages.map((stage) => (
+                  <tr key={stage.stage} className="hover:bg-muted/10">
+                    <td className="px-3 py-2 font-mono">{stage.stage}</td>
+                    <td className="px-3 py-2 font-mono text-muted-foreground">
+                      {stage.latencyMs !== undefined ? `${stage.latencyMs}ms` : '—'}
+                    </td>
+                    <td className="px-3 py-2 text-muted-foreground break-all max-w-[280px]">
+                      {(stage.error && (failureLabel[stage.error] ?? stage.error)) ||
+                        String(stage.details.message ?? stage.details.stellarAddress ?? 'ok')}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {stage.ok ? (
+                        <CheckCircle className="h-3.5 w-3.5 text-green-400 inline" />
+                      ) : (
+                        <XCircle className="h-3.5 w-3.5 text-red-400 inline" />
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => copy(buildRedactedReport(), 'fed-diag-report')}
+            className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1 transition-colors"
+          >
+            {copied === 'fed-diag-report' ? (
+              <CheckCircle className="h-3 w-3 text-green-400" />
+            ) : (
+              <Copy className="h-3 w-3" />
+            )}
+            Copy redacted diagnostic report (no query strings, no account keys)
+          </button>
+        </div>
+      )}
+    </CollapsiblePanel>
+  );
+}
+
 export function FederationTool() {
   const { copied, copy } = useCopy();
   const [input, setInput] = useState('');
@@ -738,6 +916,17 @@ export function FederationTool() {
           {fedData && <FederationPanel data={fedData} copied={copied} copy={copy} />}
           {tomlData && <TomlPanel data={tomlData} copied={copied} copy={copy} />}
           {sepData && <SepPanel data={sepData} />}
+          {tomlData && (
+            <DiagnosticsPanel
+              domain={
+                tomlData.federationServer
+                  ? new URL(tomlData.federationServer).hostname
+                  : (input.trim().split('*')[1] ?? stripProtocol(input.trim()))
+              }
+              copied={copied}
+              copy={copy}
+            />
+          )}
           {tomlData && (
             <LinkPreviewPanel
               domain={

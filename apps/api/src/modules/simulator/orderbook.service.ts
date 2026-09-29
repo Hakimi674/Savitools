@@ -178,6 +178,7 @@ function formatPriceRatio(price: unknown): string {
   throw new BadRequestException('Invalid trade price in Horizon response');
 }
 
+/* eslint-disable-next-line @typescript-eslint/no-explicit-any -- Horizon /trades records are untyped */
 function mapHorizonTrade(record: any): TradeRow {
   const baseAsset = formatAssetString({
     type: record.base_asset_type,
@@ -512,6 +513,7 @@ export class OrderbookService implements OnModuleInit, OnModuleDestroy {
       if (cursor) params.set('cursor', cursor);
 
       const data = await fetchFromHorizon(`${horizonUrl}/trades?${params.toString()}`);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Horizon /trades records are untyped
       const batch: any[] = data?._embedded?.records ?? [];
       if (batch.length === 0) {
         stopReason = 'end-of-data';

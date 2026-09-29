@@ -134,8 +134,10 @@ export class InspectorService {
 
     const operations: DecodedOperationResult[] = xdrOps.map((op, i) => {
       const resultCode = opResultCodes[i] ?? null;
+      /* eslint-disable @typescript-eslint/no-explicit-any -- Horizon response fields are loosely typed here */
       const opEffects = effects
         .filter((e) => (e as any).operation_id === (horizonOps[i] as any)?.id)
+        /* eslint-enable @typescript-eslint/no-explicit-any */
         .map((e) => ({
           type: String(e.type ?? ''),
           account: String(e.account ?? ''),
@@ -162,7 +164,9 @@ export class InspectorService {
 
     return {
       hash: horizonTx.hash,
+      /* eslint-disable @typescript-eslint/no-explicit-any -- Horizon response fields are loosely typed here */
       ledger: (horizonTx as any).ledger_attr ?? (horizonTx as any).ledger ?? 0,
+      /* eslint-enable @typescript-eslint/no-explicit-any */
       createdAt: horizonTx.created_at,
       sourceAccount: horizonTx.source_account,
       sequenceNumber: horizonTx.source_account_sequence,
@@ -170,8 +174,10 @@ export class InspectorService {
       maxFee: String(horizonTx.max_fee ?? '0'),
       memo: (horizonTx.memo ?? null) as string | null,
       memoType: horizonTx.memo_type,
+      /* eslint-disable @typescript-eslint/no-explicit-any -- Horizon response fields are loosely typed here */
       timeBounds: this.extractTimeBounds((horizonTx as any).valid_before, (horizonTx as any).valid_after),
       signatures: (horizonTx as any).signatures ?? [],
+      /* eslint-enable @typescript-eslint/no-explicit-any */
       success: horizonTx.successful,
       resultCode: txResultCode,
       resultExplanation: explainTxCode(txResultCode),
@@ -387,6 +393,7 @@ export class InspectorService {
       const result = StellarSdk.xdr.TransactionResult.fromXDR(resultXdr, 'base64');
       const inner = result.result();
       const results = inner.results?.() ?? [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- XDR union members vary by operation type
       return results.map((r: any) => {
         try {
           const inner = r.tr?.()?.switch?.()?.name ?? null;
@@ -419,6 +426,7 @@ export class InspectorService {
   }
 
   private buildComposerPayload(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Horizon transaction responses have no useful shared type
     horizonTx: any,
     ops: DecodedOperation[],
     network: string,

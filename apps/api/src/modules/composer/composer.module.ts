@@ -1,5 +1,4 @@
 import { Module } from '@nestjs/common';
-import { TypeOrmModule } from '@nestjs/typeorm';
 import { ComposerController } from './composer.controller';
 import { ComposerService } from './composer.service';
 import { TransactionSequenceService } from './transaction-sequence.service';

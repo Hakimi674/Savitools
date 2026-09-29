@@ -189,6 +189,7 @@ export class SimulatorService {
       dto.destination_asset_issuer,
     );
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Horizon path-finding records are untyped
     let rawPaths: any[];
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -206,6 +207,12 @@ export class SimulatorService {
       rawPaths = result.records;
     }
 
+    if (rawPaths.length === 0) {
+      throw new Error(
+        'No paths found for the given assets and amount',
+      );
+    }
+
     const bestPath = rawPaths[0];
     let bestRate = 0;
     if (bestPath) {
@@ -214,6 +221,7 @@ export class SimulatorService {
       bestRate = bestSrc > 0 ? bestDst / bestSrc : 0;
     }
 
+    /* eslint-disable @typescript-eslint/no-explicit-any -- Horizon path-finding responses are untyped */
     return rawPaths.map((record: any) => {
       const sourceAssetParsed = this.parseAsset({
         asset_type: record.source_asset_type,
@@ -253,6 +261,7 @@ export class SimulatorService {
         hops: intermediateAssets.length,
       };
     });
+    /* eslint-enable @typescript-eslint/no-explicit-any */
   }
 
   async estimateSlippage(dto: EstimateDto): Promise<EstimateResult> {
@@ -270,6 +279,7 @@ export class SimulatorService {
       dto.destination_asset.issuer,
     );
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Horizon path-finding records are untyped
     let rawPaths: any[];
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -295,9 +305,11 @@ export class SimulatorService {
 
     const bestPath = rawPaths[0];
 
+    /* eslint-disable @typescript-eslint/no-explicit-any -- Horizon path-finding responses are untyped */
     const intermediateAssets: SimulatedAsset[] = (bestPath.path ?? []).map(
       (p: any) => this.parseAsset(p),
     );
+    /* eslint-enable @typescript-eslint/no-explicit-any */
 
     const srcAmt = parseFloat(bestPath.source_amount);
     const dstAmt = parseFloat(bestPath.destination_amount);
@@ -481,6 +493,7 @@ export class SimulatorService {
   async simulateFee(operations: number, network: string): Promise<FeeResult> {
     const horizonUrl = getHorizonUrl(network);
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- /fee_stats response fields are read as loose JSON
     let json: Record<string, any>;
     try {
       json = await fetchFromHorizon(`${horizonUrl}/fee_stats`);

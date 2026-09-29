@@ -76,6 +76,7 @@ export class TransactionService {
 
     // Simulate the transaction using Horizon simulateTransaction or transaction post
     const server = horizonServer(this.configService, network === 'mainnet' ? 'public' : 'testnet');
+    /* eslint-disable @typescript-eslint/no-explicit-any -- Horizon simulation responses are untyped */
     let simulationResult: any;
     try {
       // Use Horizon simulate transaction if available or fallback to test submission / simulate endpoint
@@ -95,6 +96,7 @@ export class TransactionService {
         error: e?.response?.data ?? e.message,
       };
     }
+    /* eslint-enable @typescript-eslint/no-explicit-any */
 
     const replayRecord = this.replayRepository.create({
       userId,

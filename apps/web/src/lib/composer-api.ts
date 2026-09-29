@@ -160,6 +160,41 @@ export async function buildFeeBump(input: FeeBumpInput): Promise<FeeBumpResult> 
   });
 }
 
+// Fee-bump inspect (Savitura/Savitools#340)
+// -------------------------------------------------------------------------------
+
+export interface FeeBumpInspectResult {
+  type: 'fee_bump';
+  network: string;
+  feeSource: string;
+  baseFee: string;
+  fee: string;
+  networkMinimumFee: string;
+  effectiveFee: string;
+  hash: string;
+  inner: {
+    hash: string;
+    source: string;
+    sequence: string;
+    fee: number;
+    operationCount: number;
+    isSoroban: boolean;
+    timeBounds: { minTime: string; maxTime: string } | null;
+    operations: string[];
+    signatures: Array<{ publicKeyHint: string; signature: string }>;
+    signatureVerifications: boolean[];
+  };
+  outerSignatures: Array<{ publicKeyHint: string; signature: string }>;
+}
+
+/** Decode a fee-bump envelope and describe both layers. */
+export async function inspectFeeBump(xdr: string): Promise<FeeBumpInspectResult> {
+  return apiFetch<FeeBumpInspectResult>('/composer/fee-bump/inspect', {
+    method: 'POST',
+    body: JSON.stringify({ innerXdr: xdr }),
+  });
+}
+
 export async function simulateTransaction(
   input: SimulateTransactionInput,
 ): Promise<SimulateTransactionResult> {

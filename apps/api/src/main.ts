@@ -55,6 +55,7 @@ async function bootstrap() {
 
   // Block GraphQL introspection in production
   if (nodeEnv === 'production') {
+    /* eslint-disable @typescript-eslint/no-explicit-any -- raw Fastify instance and request/reply shapes are not worth typing here */
     const fastify = app.getHttpAdapter().getInstance() as any;
     fastify.addHook('preHandler', async (request: any, reply: any) => {
       const body = request.body;
@@ -74,6 +75,7 @@ async function bootstrap() {
         return;
       }
     });
+    /* eslint-enable @typescript-eslint/no-explicit-any */
   }
 
   // Only enable Swagger in development and staging environments

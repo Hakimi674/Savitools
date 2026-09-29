@@ -5,6 +5,7 @@ import { ResolveQueryDto } from './dto/resolve-query.dto';
 import { TomlQueryDto } from './dto/toml-query.dto';
 import { SepQueryDto } from './dto/sep-query.dto';
 import { LinkPreviewQueryDto } from './dto/link-preview-query.dto';
+import { DiagnosticsQueryDto } from './dto/diagnostics-query.dto';
 
 @ApiTags('federation')
 @Controller('federation')
@@ -46,6 +47,20 @@ export class FederationController {
   })
   getSepSupport(@Query() query: SepQueryDto) {
     return this.federationService.getSepSupport(query.domain);
+  }
+
+  @Get('diagnostics')
+  @ApiOperation({
+    summary:
+      'Diagnose a federation server: TOML discovery, both lookup directions, staged error classification, redacted report',
+  })
+  @ApiQuery({
+    name: 'domain',
+    description: 'Anchor domain with a stellar.toml declaring FEDERATION_SERVER',
+    example: 'stellar.org',
+  })
+  getDiagnostics(@Query() query: DiagnosticsQueryDto) {
+    return this.federationService.getServerDiagnostics(query.domain);
   }
 
   @Get('link-preview')

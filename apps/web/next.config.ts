@@ -77,9 +77,8 @@ const nextConfig: NextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
-  experimental: {
-    turbopack: {},
-  },
+  // `turbopack` moved out of `experimental` in Next 15.5+ typings and is now
+  // the default dev bundler — no explicit config needed.
 };
 
 export default nextConfig;
