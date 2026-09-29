@@ -5,6 +5,8 @@ import { ResolveQueryDto } from './dto/resolve-query.dto';
 import { TomlQueryDto } from './dto/toml-query.dto';
 import { SepQueryDto } from './dto/sep-query.dto';
 import { LinkPreviewQueryDto } from './dto/link-preview-query.dto';
+import { AssetMetadataQueryDto } from './dto/asset-metadata-query.dto';
+import { HomeDomainQueryDto } from './dto/home-domain-query.dto';
 
 @ApiTags('federation')
 @Controller('federation')
@@ -33,6 +35,18 @@ export class FederationController {
   })
   getToml(@Query() query: TomlQueryDto) {
     return this.federationService.getToml(query.domain);
+  }
+
+  @Get('asset-metadata')
+  @ApiOperation({ summary: 'Fetch declared Stellar asset metadata after validating the issuer home domain' })
+  getAssetMetadata(@Query() query: AssetMetadataQueryDto) {
+    return this.federationService.getAssetMetadata(query.domain, query.code, query.issuer);
+  }
+
+  @Get('validate-home-domain')
+  @ApiOperation({ summary: 'Check that a stellar.toml declares an issuer for its claimed home domain' })
+  validateHomeDomain(@Query() query: HomeDomainQueryDto) {
+    return this.federationService.validateHomeDomain(query.domain, query.issuer);
   }
 
   @Get('sep')

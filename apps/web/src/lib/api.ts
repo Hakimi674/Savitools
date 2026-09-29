@@ -1470,6 +1470,13 @@ export interface TomlResult {
   validationWarnings: string[];
 }
 
+export interface HomeDomainValidationResult {
+  valid: boolean;
+  domain: string;
+  issuer: string;
+  reason: 'issuer_not_declared' | 'home_domain_mismatch' | null;
+}
+
 export interface SepInfo {
   number: number;
   name: string;
@@ -1492,6 +1499,18 @@ export async function fetchStellarToml(domain: string) {
   return apiFetch<TomlResult>(
     `/federation/toml?domain=${encodeURIComponent(domain)}`,
   );
+}
+
+export async function validateHomeDomain(domain: string, issuer: string) {
+  const params = new URLSearchParams({ domain, issuer });
+  return apiFetch<HomeDomainValidationResult>(
+    `/federation/validate-home-domain?${params.toString()}`,
+  );
+}
+
+export async function fetchAssetMetadata(domain: string, code: string, issuer: string) {
+  const params = new URLSearchParams({ domain, code, issuer });
+  return apiFetch<TomlCurrency>(`/federation/asset-metadata?${params.toString()}`);
 }
 
 export async function fetchSepSupport(domain: string) {

@@ -161,6 +161,54 @@ describe('FederationService', () => {
     });
   });
 
+  describe('asset metadata and home-domain validation', () => {
+    it('validates an issuer declared in stellar.toml and returns matching metadata', async () => {
+      mockFetch({
+        'assets.example/.well-known/stellar.toml': {
+          ok: true,
+          text: `ACCOUNTS = ["${VALID_KEY}"]\n[[CURRENCIES]]\nCODE = "USDC"\nISSUER = "${VALID_KEY}"\nNAME = "USD Coin"\n`,
+        },
+      });
+
+      await expect(service.validateHomeDomain('ASSETS.EXAMPLE', VALID_KEY)).resolves.toEqual({
+        valid: true,
+        domain: 'assets.example',
+        issuer: VALID_KEY,
+        reason: null,
+      });
+      await expect(service.getAssetMetadata('assets.example', 'USDC', VALID_KEY)).resolves.toMatchObject({
+        code: 'USDC',
+        issuer: VALID_KEY,
+        name: 'USD Coin',
+      });
+    });
+
+    it('returns deterministic invalid results for undeclared issuers and rejects malformed requests', async () => {
+      mockFetch({ 'assets.example/.well-known/stellar.toml': { ok: true, text: 'ACCOUNTS = []\n' } });
+      await expect(service.validateHomeDomain('assets.example', VALID_KEY)).resolves.toMatchObject({
+        valid: false,
+        reason: 'issuer_not_declared',
+      });
+      await expect(service.validateHomeDomain('not a domain', VALID_KEY)).rejects.toThrow(BadRequestException);
+      await expect(service.validateHomeDomain('https://assets.example/path', VALID_KEY)).rejects.toThrow(BadRequestException);
+      await expect(service.getAssetMetadata('assets.example', 'BAD CODE', VALID_KEY)).rejects.toThrow(BadRequestException);
+      await expect(service.getAssetMetadata('assets.example', 'USDC', VALID_KEY)).rejects.toThrow(NotFoundException);
+    });
+
+    it('reports a mismatch when a structured account declares a different home domain', async () => {
+      mockFetch({
+        'assets.example/.well-known/stellar.toml': {
+          ok: true,
+          text: `[[ACCOUNTS]]\nPUBLIC_KEY = "${VALID_KEY}"\nHOME_DOMAIN = "other.example"\n`,
+        },
+      });
+      await expect(service.validateHomeDomain('assets.example', VALID_KEY)).resolves.toMatchObject({
+        valid: false,
+        reason: 'home_domain_mismatch',
+      });
+    });
+  });
+
   describe('getToml', () => {
     it('fetches and parses a valid stellar.toml', async () => {
       const tomlContent = [
