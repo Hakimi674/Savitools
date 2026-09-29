@@ -242,25 +242,46 @@ function NoResultsState({
  */
 function LpQuotePanel({ network }: { network: NetworkChoice }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
-  const [scenario, setScenario] = useState<PoolQuoteScenario>('deposit');
+  const [scenario, setScenario] = useState<PoolQuoteScenario>(
+    searchParams.get('scenario') === 'withdraw' ? 'withdraw' : 'deposit',
+  );
 
   // pool identification
-  const [poolId, setPoolId] = useState('');
-  const [assetA, setAssetA] = useState('XLM');
-  const [assetB, setAssetB] = useState(`USDC:${EXAMPLE_USDC_ISSUER}`);
+  const [poolId, setPoolId] = useState(searchParams.get('poolId') ?? '');
+  const [assetA, setAssetA] = useState(searchParams.get('assetA') ?? 'XLM');
+  const [assetB, setAssetB] = useState(searchParams.get('assetB') ?? `USDC:${EXAMPLE_USDC_ISSUER}`);
 
   // deposit inputs
-  const [amountA, setAmountA] = useState('');
-  const [amountB, setAmountB] = useState('');
+  const [amountA, setAmountA] = useState(searchParams.get('amountA') ?? '');
+  const [amountB, setAmountB] = useState(searchParams.get('amountB') ?? '');
 
   // withdrawal inputs
-  const [shares, setShares] = useState('');
-  const [withdrawAmountA, setWithdrawAmountA] = useState('');
+  const [shares, setShares] = useState(searchParams.get('shares') ?? '');
+  const [withdrawAmountA, setWithdrawAmountA] = useState(searchParams.get('withdrawAmountA') ?? '');
 
   const [result, setResult] = useState<PoolQuoteResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    params.set('tab', 'lp');
+    params.set('network', network);
+    params.set('scenario', scenario);
+    params.set('poolId', poolId);
+    params.set('assetA', assetA);
+    params.set('assetB', assetB);
+    params.set('amountA', amountA);
+    params.set('amountB', amountB);
+    params.set('shares', shares);
+    params.set('withdrawAmountA', withdrawAmountA);
+    const query = params.toString();
+    if (window.location.search !== `?${query}`) {
+      router.replace(`/simulator?${query}`, { scroll: false });
+    }
+  }, [amountA, amountB, assetA, assetB, network, poolId, router, scenario, shares, withdrawAmountA]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -662,6 +683,29 @@ export function SimulatorTool() {
       loadExample();
     }
   }, [searchParams, loadExample]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    params.set('tab', activeTab);
+    params.set('network', network);
+    params.set('direction', direction);
+    params.set('src_type', srcType);
+    params.set('dst_type', dstType);
+    params.set('amount', amount);
+    if (srcCode) params.set('src_code', srcCode);
+    else params.delete('src_code');
+    if (srcIssuer) params.set('src_issuer', srcIssuer);
+    else params.delete('src_issuer');
+    if (dstCode) params.set('dst_code', dstCode);
+    else params.delete('dst_code');
+    if (dstIssuer) params.set('dst_issuer', dstIssuer);
+    else params.delete('dst_issuer');
+    params.delete('example');
+    const query = params.toString();
+    if (window.location.search !== `?${query}`) {
+      router.replace(`/simulator?${query}`, { scroll: false });
+    }
+  }, [activeTab, amount, direction, dstCode, dstIssuer, dstType, network, router, srcCode, srcIssuer, srcType]);
 
   const markStepComplete = () => {
     import('@/lib/onboarding').then((m) => m.markStepComplete('simulate'));

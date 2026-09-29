@@ -1,6 +1,7 @@
 import { cn } from '@/lib/utils';
 import { BookOpen } from 'lucide-react';
 import Link from 'next/link';
+import { ShareToolLink } from './share-tool-link';
 
 interface ToolPageShellProps {
   title: string;
@@ -20,15 +21,18 @@ export function ToolPageShell({ title, description, children, className, docsHre
             <h1 className="text-xl font-semibold mb-2">{title}</h1>
             <p className="text-muted-foreground text-sm">{description}</p>
           </div>
-          {docsHref && (
-            <Link
-              href={docsHref}
-              className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
-            >
-              <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
-              Usage docs
-            </Link>
-          )}
+          <div className="flex items-center gap-2">
+            <ShareToolLink />
+            {docsHref && (
+              <Link
+                href={docsHref}
+                className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors"
+              >
+                <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+                Usage docs
+              </Link>
+            )}
+          </div>
         </div>
         {children}
       </div>

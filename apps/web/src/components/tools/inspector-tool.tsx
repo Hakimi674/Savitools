@@ -591,6 +591,10 @@ export function InspectorTool() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const value = input.trim();
+    const type = detectInputType(value);
+    const key = type === 'hash' ? 'hash' : type === 'address' ? 'address' : type === 'xdr' ? 'xdr' : null;
+    if (key) router.replace(`/inspector?${key}=${encodeURIComponent(value)}`, { scroll: false });
     void runInspect(input);
   };
 

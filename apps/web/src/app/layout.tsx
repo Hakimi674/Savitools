@@ -3,6 +3,7 @@ import type { Metadata } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 import { AuthProvider } from '@/lib/auth-context';
 import { NetworkProvider } from '@/lib/network-context';
+import { ThemeProvider } from '@/lib/theme-context';
 import { SiteHeader } from '@/components/site-header';
 import {
   CommandPaletteProvider,
@@ -32,16 +33,18 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" suppressHydrationWarning>
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         <AuthProvider>
-          <NetworkProvider>
-            <CommandPaletteProvider>
-              <SiteHeader />
-              {children}
-              <CommandPaletteDialog />
-            </CommandPaletteProvider>
-          </NetworkProvider>
+          <ThemeProvider>
+            <NetworkProvider>
+              <CommandPaletteProvider>
+                <SiteHeader />
+                {children}
+                <CommandPaletteDialog />
+              </CommandPaletteProvider>
+            </NetworkProvider>
+          </ThemeProvider>
         </AuthProvider>
         <QuickstartWidget />
       </body>
