@@ -126,6 +126,17 @@ export class PlaygroundService {
   private readonly specCache = new Map<string, CachedSpec>();
   private readonly specTtlMs: number;
 
+  /**
+   * Compute a display mask for an API key: first 8 chars + '...' + last 4 chars.
+   * Extracted to a single helper to avoid duplication and ensure consistency.
+   */
+  private static maskApiKey(plaintext: string): string {
+    if (plaintext.length <= 12) {
+      return plaintext; // Too short to mask meaningfully
+    }
+    return plaintext.slice(0, 8) + '...' + plaintext.slice(-4);
+  }
+
   constructor(
     @InjectRepository(ApiKey)
     private readonly apiKeysRepository: Repository<ApiKey>,
@@ -424,6 +435,7 @@ export class PlaygroundService {
       iv,
       authTag,
       keyVersion: 2,
+      keyPreview: PlaygroundService.maskApiKey(dto.apiKey),
     });
 
     const saved = await this.apiKeysRepository.save(key);
@@ -436,10 +448,22 @@ export class PlaygroundService {
       order: { createdAt: 'DESC' },
     });
 
-    return Promise.all(
+    // Use Promise.allSettled so one undecryptable key doesn't break the entire listing
+    const results = await Promise.allSettled(
       keys.map(async (key) => {
-        const decrypted = await this.decryptAndUpgrade(userId, key);
-        const masked = decrypted.slice(0, 8) + '...' + decrypted.slice(-4);
+        // If keyPreview exists, use it; otherwise fallback to decrypting (for legacy rows)
+        let masked: string;
+        if (key.keyPreview) {
+          masked = key.keyPreview;
+        } else {
+          try {
+            const decrypted = await this.decryptAndUpgrade(userId, key);
+            masked = PlaygroundService.maskApiKey(decrypted);
+          } catch (error) {
+            this.logger.warn(`Failed to decrypt key ${key.id} for user ${userId}: ${error}`);
+            masked = '[decryption failed]';
+          }
+        }
         return {
           id: key.id,
           label: key.label,
@@ -449,6 +473,11 @@ export class PlaygroundService {
         };
       }),
     );
+
+    // Return only fulfilled results, filtering out rejected ones
+    return results
+      .filter((result): result is PromiseFulfilledResult<{ id: string; label: string; provider: ApiKeyProvider; maskedKey: string; createdAt: Date }> => result.status === 'fulfilled')
+      .map(result => result.value);
   }
 
   async deleteKey(id: string, userId: string): Promise<void> {
@@ -490,18 +519,17 @@ export class PlaygroundService {
       iv,
       authTag,
       keyVersion: 2,
+      keyPreview: PlaygroundService.maskApiKey(dto.apiKey),
       providerOrigin: dto.origin,
       openApiSpec: spec,
     });
 
     const saved = await this.apiKeysRepository.save(key);
-    const decrypted = await this.decryptAndUpgrade(userId, saved);
-    const masked = decrypted.slice(0, 8) + '...' + decrypted.slice(-4);
     return {
       id: saved.id,
       name: saved.label,
       provider: saved.provider,
-      maskedKey: masked,
+      maskedKey: saved.keyPreview!,
       createdAt: saved.createdAt,
     };
   }
@@ -520,10 +548,22 @@ export class PlaygroundService {
       order: { createdAt: 'DESC' },
     });
 
-    return Promise.all(
+    // Use Promise.allSettled to prevent one bad key from breaking the entire listing
+    const results = await Promise.allSettled(
       keys.map(async (key) => {
-        const decrypted = await this.decryptAndUpgrade(userId, key);
-        const masked = decrypted.slice(0, 8) + '...' + decrypted.slice(-4);
+        // Use stored preview if available, otherwise fallback to decryption
+        let masked: string;
+        if (key.keyPreview) {
+          masked = key.keyPreview;
+        } else {
+          try {
+            const decrypted = await this.decryptAndUpgrade(userId, key);
+            masked = PlaygroundService.maskApiKey(decrypted);
+          } catch (error) {
+            this.logger.warn(`Failed to decrypt key ${key.id} for user ${userId}: ${error}`);
+            masked = '[decryption failed]';
+          }
+        }
         return {
           id: key.id,
           name: key.label,
@@ -535,6 +575,11 @@ export class PlaygroundService {
         };
       }),
     );
+
+    // Return only fulfilled results
+    return results
+      .filter((result): result is PromiseFulfilledResult<{ id: string; name: string; provider: ApiKeyProvider; origin: string | null; hasSpec: boolean; maskedKey: string; createdAt: Date }> => result.status === 'fulfilled')
+      .map(result => result.value);
   }
 
   async renameProvider(
@@ -592,6 +637,7 @@ export class PlaygroundService {
       key.iv = iv;
       key.authTag = authTag;
       key.keyVersion = 2;
+      key.keyPreview = PlaygroundService.maskApiKey(dto.apiKey);
     }
 
     const saved = await this.apiKeysRepository.save(key);

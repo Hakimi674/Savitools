@@ -1146,7 +1146,7 @@ export interface SandboxFundResult {
 export interface SandboxPaymentResult {
   success: boolean;
   txHash: string;
-  feeCharged: number;
+  feeCharged: string; // Fixed: was number, server returns string
   resultCode: string;
   destination: string;
   /** Underlying G… account a muxed destination pays into. */
@@ -1475,7 +1475,7 @@ export interface SepInfo {
   name: string;
   supported: boolean;
   endpoint: string | null;
-  probeStatus: "green" | "yellow" | "red" | "none";
+  probeStatus: "green" | "yellow" | "red" | "none" | "timeout"; // Fixed: added 'timeout' member
 }
 
 export interface SepResult {
