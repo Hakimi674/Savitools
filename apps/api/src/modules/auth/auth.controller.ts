@@ -41,10 +41,19 @@ import { OptionalJwtAuthGuard } from './guards/optional-jwt-auth.guard';
 
 type AuthRequest = FastifyRequest & { user?: { id: string; email: string } };
 
-function extractIp(req: FastifyRequest): string | undefined {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string') return forwarded.split(',')[0].trim();
-  return req.ip;
+/**
+ * Client address used for the password-reset rate limit and the audit trail
+ * (Savitura/Savitools#297).
+ *
+ * `req.ip` is Fastify's resolved address. With the adapter's default
+ * `trustProxy: false` it is the non-spoofable socket address, so an anonymous
+ * caller cannot rotate `X-Forwarded-For` to get a fresh limiter bucket. The raw
+ * header is deliberately not read here: hop 0 of a client-supplied list is
+ * caller-controlled. A deployment behind a trusted proxy opts in through the
+ * adapter's `trustProxy` option, which changes `req.ip` — and only that.
+ */
+export function clientAddress(req: FastifyRequest): string | undefined {
+  return req.ip ?? undefined;
 }
 
 @ApiTags('auth')
@@ -95,7 +104,7 @@ export class AuthController {
     @Res({ passthrough: true }) reply: FastifyReply,
   ) {
     const { user, tokens } = await this.authService.login(dto, {
-      ipAddress: extractIp(req),
+      ipAddress: clientAddress(req),
       userAgent: req.headers['user-agent'],
     });
     this.setAuthCookies(reply, tokens.accessToken, tokens.refreshToken);
@@ -120,7 +129,7 @@ export class AuthController {
     @Body() dto: ForgotPasswordDto,
     @Req() req: FastifyRequest,
   ) {
-    return this.authService.requestPasswordReset(dto.email, extractIp(req));
+    return this.authService.requestPasswordReset(dto.email, clientAddress(req));
   }
 
   @Post('reset-password')
@@ -151,7 +160,7 @@ export class AuthController {
     }
 
     const { user, tokens } = await this.authService.refresh(refreshToken, {
-      ipAddress: extractIp(req),
+      ipAddress: clientAddress(req),
       userAgent: req.headers['user-agent'],
     });
     this.setAuthCookies(reply, tokens.accessToken, tokens.refreshToken);
@@ -228,7 +237,7 @@ export class AuthController {
     const { user, tokens } = await this.authService.fluxaLink(
       dto,
       currentUser ?? undefined,
-      { ipAddress: extractIp(req), userAgent: req.headers['user-agent'] },
+      { ipAddress: clientAddress(req), userAgent: req.headers['user-agent'] },
     );
     this.setAuthCookies(reply, tokens.accessToken, tokens.refreshToken);
     return {
@@ -394,7 +403,7 @@ export class AuthController {
     const { user, tokens } = await this.authService.verifyPasskeyLogin(
       dto.assertionResponse as never,
       {
-        ipAddress: extractIp(req),
+        ipAddress: clientAddress(req),
         userAgent: req.headers['user-agent'],
       },
     );
