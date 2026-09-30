@@ -1999,6 +1999,99 @@ export async function getSorobanRpcMethod(method: string) {
   return apiFetch<SorobanRpcMethodSpec>(`/soroban-rpc/methods/${method}`);
 }
 
+/* ─── Liquidity Pools ─────────────────────────────────────────────────────── */
+
+export type NetworkChoice = 'mainnet' | 'testnet';
+
+export interface PoolDetails {
+  poolId: string;
+  network: string;
+  assetA: string;
+  assetB: string;
+  reserveA: string;
+  reserveB: string;
+  totalShares: string;
+  feePct: string;
+  totalTrustlines: number;
+  type: string;
+  spotPriceAperB: string;
+  spotPriceBperA: string;
+}
+
+export interface ShareValueResult {
+  poolId: string;
+  network: string;
+  shares: string;
+  valueA: string;
+  valueB: string;
+  totalValueUsd?: string;
+  sharePercentage: string;
+  assetA: string;
+  assetB: string;
+}
+
+export interface WatchedPoolItem {
+  id: string;
+  poolId: string;
+  network: string;
+  assetA: string;
+  assetB: string;
+  label: string | null;
+  createdAt: string;
+}
+
+export async function searchPools(
+  assetA: string,
+  assetB: string,
+  network: NetworkChoice = 'testnet',
+) {
+  const params = new URLSearchParams({ assetA, assetB, network });
+  return apiFetch<PoolDetails[]>(`/liquidity-pools/search?${params}`);
+}
+
+export async function getPoolDetails(
+  poolId: string,
+  network: NetworkChoice = 'testnet',
+) {
+  const params = new URLSearchParams({ poolId, network });
+  return apiFetch<PoolDetails>(`/liquidity-pools/details?${params}`);
+}
+
+export async function calculateShareValue(dto: {
+  poolId: string;
+  shares: string;
+  network?: NetworkChoice;
+}) {
+  return apiFetch<ShareValueResult>('/liquidity-pools/share-value', {
+    method: 'POST',
+    body: JSON.stringify(dto),
+  });
+}
+
+export async function watchPool(dto: {
+  poolId: string;
+  assetA: string;
+  assetB: string;
+  label?: string;
+  network?: NetworkChoice;
+}) {
+  return apiFetch<WatchedPoolItem>('/liquidity-pools/watch', {
+    method: 'POST',
+    body: JSON.stringify(dto),
+  });
+}
+
+export async function unwatchPool(id: string) {
+  return apiFetch<void>('/liquidity-pools/unwatch', {
+    method: 'POST',
+    body: JSON.stringify({ id }),
+  });
+}
+
+export async function getWatchedPools() {
+  return apiFetch<WatchedPoolItem[]>('/liquidity-pools/watched');
+}
+
 /**
  * Invoke one whitelisted method. The API validates `params` against the
  * method schema and only ever forwards the call to its configured endpoint;
