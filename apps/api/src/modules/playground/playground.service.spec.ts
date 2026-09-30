@@ -314,15 +314,21 @@ describe('PlaygroundService key encryption migration (Savitura/Savitools#206)', 
       expect.any(String),
     );
     // ...and persists it as keyVersion 2, so a retry of the migration is a no-op read.
-    expect(apiKeysRepository.update).toHaveBeenCalledWith('key-1', {
-      encryptedKey: 'v2-ciphertext',
-      iv: 'v2-iv',
-      authTag: 'v2-auth-tag',
-      keyVersion: 2,
-    });
+    // The display mask rides along in the same write (Savitura/Savitools#293).
+    expect(apiKeysRepository.update).toHaveBeenCalledTimes(1);
+    expect(apiKeysRepository.update).toHaveBeenCalledWith(
+      'key-1',
+      expect.objectContaining({
+        encryptedKey: 'v2-ciphertext',
+        iv: 'v2-iv',
+        authTag: 'v2-auth-tag',
+        keyVersion: 2,
+        maskedKey: 'plaintex...-key',
+      }),
+    );
   });
 
-  it('reads an already-upgraded (keyVersion: 2) row without touching the legacy decrypt path or re-writing it', async () => {
+  it('reads a row that already carries its mask without decrypting or writing', async () => {
     const upgradedRecord = {
       id: 'key-2',
       userId: 'user-1',
@@ -330,6 +336,7 @@ describe('PlaygroundService key encryption migration (Savitura/Savitools#206)', 
       iv: 'v2-iv',
       authTag: 'v2-auth-tag',
       keyVersion: 2,
+      maskedKey: 'plaintex...-key',
     };
 
     const apiKeysRepository = {
@@ -345,22 +352,60 @@ describe('PlaygroundService key encryption migration (Savitura/Savitools#206)', 
     };
 
     const service = new PlaygroundService(
-      apiKeysRepository as any,
-      historyRepository as any,
-      configService as any,
-      authService as any,
-      encryptionService as any,
+      apiKeysRepository as never,
+      historyRepository as never,
+      configService as never,
+      authService as never,
+      encryptionService as never,
     );
 
     const keys = await service.listKeys('user-1');
 
-    expect(keys[0].maskedKey).toContain('plai');
-    expect(encryptionService.decryptForUser).toHaveBeenCalledWith(
-      'user-1',
-      { encrypted: 'v2-ciphertext', iv: 'v2-iv', authTag: 'v2-auth-tag' },
-      expect.any(String),
-    );
+    expect(keys[0].maskedKey).toBe('plaintex...-key');
+    // Nothing to decrypt and nothing to write: the mask is already stored.
+    expect(encryptionService.decryptForUser).not.toHaveBeenCalled();
     expect(encryptionService.encryptForUser).not.toHaveBeenCalled();
     expect(apiKeysRepository.update).not.toHaveBeenCalled();
+  });
+
+  it('backfills the mask once for a row written before the column existed', async () => {
+    const withoutMask = {
+      id: 'key-2',
+      userId: 'user-1',
+      encryptedKey: 'v2-ciphertext',
+      iv: 'v2-iv',
+      authTag: 'v2-auth-tag',
+      keyVersion: 2,
+    };
+
+    const apiKeysRepository = {
+      find: jest.fn().mockResolvedValue([withoutMask]),
+      update: jest.fn().mockResolvedValue(undefined),
+    };
+    const historyRepository = { create: jest.fn(), save: jest.fn() };
+    const configService = { get: jest.fn(), getOrThrow: jest.fn() };
+    const authService = { resolveKey: jest.fn() };
+    const encryptionService = {
+      encryptForUser: jest.fn(),
+      decryptForUser: jest.fn().mockReturnValue('plaintext-api-key'),
+    };
+
+    const service = new PlaygroundService(
+      apiKeysRepository as never,
+      historyRepository as never,
+      configService as never,
+      authService as never,
+      encryptionService as never,
+    );
+
+    const keys = await service.listKeys('user-1');
+
+    expect(keys[0].maskedKey).toBe('plaintex...-key');
+    expect(encryptionService.decryptForUser).toHaveBeenCalledTimes(1);
+    // A single write, and it only stores the mask — the ciphertext is untouched.
+    expect(apiKeysRepository.update).toHaveBeenCalledTimes(1);
+    expect(apiKeysRepository.update).toHaveBeenCalledWith('key-2', {
+      maskedKey: 'plaintex...-key',
+    });
   });
 });

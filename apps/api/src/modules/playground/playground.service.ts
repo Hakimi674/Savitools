@@ -468,7 +468,7 @@ export class PlaygroundService {
           id: key.id,
           label: key.label,
           provider: key.provider,
-          maskedKey: masked,
+          maskedKey: await this.maskFor(userId, key),
           createdAt: key.createdAt,
         };
       }),
@@ -522,6 +522,7 @@ export class PlaygroundService {
       keyPreview: PlaygroundService.maskApiKey(dto.apiKey),
       providerOrigin: dto.origin,
       openApiSpec: spec,
+      maskedKey: maskApiKey(dto.apiKey),
     });
 
     const saved = await this.apiKeysRepository.save(key);
@@ -570,7 +571,7 @@ export class PlaygroundService {
           provider: key.provider,
           origin: key.providerOrigin,
           hasSpec: !!key.openApiSpec,
-          maskedKey: masked,
+          maskedKey: await this.maskFor(userId, key),
           createdAt: key.createdAt,
         };
       }),
@@ -684,6 +685,31 @@ export class PlaygroundService {
   }
 
   /**
+   * The display mask for a stored key.
+   *
+   * Rows written before the `maskedKey` column existed have no mask; they pay
+   * for exactly one decrypt (which also re-encrypts legacy material and, on that
+   * path, persists the mask in the same update) and every later read is
+   * decrypt-free. This is what keeps the list endpoints O(1) decrypts instead of
+   * O(keys per request).
+   */
+  private async maskFor(userId: string, key: ApiKey): Promise<string> {
+    if (key.maskedKey) {
+      return key.maskedKey;
+    }
+
+    const plaintext = await this.decryptAndUpgrade(userId, key);
+    if (key.maskedKey) {
+      return key.maskedKey;
+    }
+
+    const masked = maskApiKey(plaintext);
+    await this.apiKeysRepository.update(key.id, { maskedKey: masked });
+    key.maskedKey = masked;
+    return masked;
+  }
+
+  /**
    * Decrypt an API key, transparently re-encrypting it under the new
    * per-user, purpose-bound scheme if it is still on the legacy global key.
    * Idempotent and safe to retry: once a row is `keyVersion: 2` this is a
@@ -705,15 +731,25 @@ export class PlaygroundService {
       plaintext,
       ENCRYPTION_PURPOSES.PLAYGROUND_API_KEY,
     );
+    const masked = maskApiKey(plaintext);
     await this.apiKeysRepository.update(key.id, {
       encryptedKey: upgraded.encrypted,
       iv: upgraded.iv,
       authTag: upgraded.authTag,
       keyVersion: 2,
+      // The plaintext is in hand here, so the mask rides along with the
+      // re-encryption instead of costing a decrypt on the next list call.
+      maskedKey: masked,
     });
+    key.maskedKey = masked;
 
     return plaintext;
   }
+}
+
+/** `first8...last4` of the plaintext — the only part of a stored key we display. */
+export function maskApiKey(plaintext: string): string {
+  return plaintext.slice(0, 8) + '...' + plaintext.slice(-4);
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
