@@ -11,6 +11,7 @@ import {
   type TransferLinkResult,
 } from '@/lib/api';
 import {
+  BookmarkPlus,
   AlertTriangle,
   CheckCircle,
   ChevronDown,
@@ -22,13 +23,38 @@ import {
   Link2,
   Loader2,
   Search,
+  RefreshCw,
   Shield,
+  Trash2,
   XCircle,
 } from 'lucide-react';
-import { useCallback, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ErrorState } from './state-display';
 
 type InputType = 'publicKey' | 'federation' | 'domain';
+
+interface SavedCounterparty {
+  input: string;
+  name: string;
+}
+
+const COUNTERPARTY_STORAGE_KEY = 'savitools:federation:counterparties';
+
+function loadSavedCounterparties(): SavedCounterparty[] {
+  try {
+    const saved = window.localStorage.getItem(COUNTERPARTY_STORAGE_KEY);
+    if (!saved) return [];
+    const parsed: unknown = JSON.parse(saved);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (item): item is SavedCounterparty =>
+        typeof item?.input === 'string' && typeof item?.name === 'string',
+    );
+  } catch {
+    return [];
+  }
+}
 
 function detectInputType(value: string): InputType | null {
   const v = value.trim();
@@ -565,8 +591,14 @@ function SepPanel({ data }: { data: SepResult }) {  return (
 }
 
 export function FederationTool() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const initialQuery = searchParams.get('query') ?? '';
+  const initialLookupStarted = useRef(false);
   const { copied, copy } = useCopy();
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState(initialQuery);
+  const [counterpartyName, setCounterpartyName] = useState('');
+  const [savedCounterparties, setSavedCounterparties] = useState<SavedCounterparty[]>(loadSavedCounterparties);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fedData, setFedData] = useState<FederationResolveResult | null>(null);
@@ -575,7 +607,7 @@ export function FederationTool() {
 
   const detectedType = input.trim() ? detectInputType(input.trim()) : null;
 
-  const runLookup = async (value: string) => {
+  const runLookup = useCallback(async (value: string) => {
     const v = value.trim();
     if (!v) return;
 
@@ -645,10 +677,38 @@ export function FederationTool() {
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(COUNTERPARTY_STORAGE_KEY, JSON.stringify(savedCounterparties));
+  }, [savedCounterparties]);
+
+  useEffect(() => {
+    if (initialLookupStarted.current) return;
+    initialLookupStarted.current = true;
+    if (initialQuery) void runLookup(initialQuery);
+  }, [initialQuery, runLookup]);
+
+  const saveCounterparty = () => {
+    const value = input.trim();
+    if (!value) return;
+    const name = counterpartyName.trim() || value;
+    setSavedCounterparties((current) => [
+      { input: value, name },
+      ...current.filter((contact) => contact.input !== value),
+    ].slice(0, 50));
+    setCounterpartyName('');
+  };
+
+  const inspectCounterparty = (contact: SavedCounterparty) => {
+    setInput(contact.input);
+    router.replace(`/inspector/federation?query=${encodeURIComponent(contact.input)}`, { scroll: false });
+    void runLookup(contact.input);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    router.replace(`/inspector/federation?query=${encodeURIComponent(input.trim())}`, { scroll: false });
     void runLookup(input);
   };
 
@@ -687,6 +747,45 @@ export function FederationTool() {
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Inspect'}
         </button>
       </form>
+
+      {savedCounterparties.length > 0 && (
+        <section aria-label="Saved counterparties" className="mb-6 space-y-2">
+          <h2 className="text-xs font-medium text-muted-foreground">Address book</h2>
+          <div className="divide-y divide-border rounded-md border border-border">
+            {savedCounterparties.map((contact) => (
+              <div key={contact.input} className="flex items-center gap-3 px-3 py-2">
+                <button
+                  type="button"
+                  onClick={() => inspectCounterparty(contact)}
+                  className="min-w-0 flex-1 text-left"
+                  title={`Resolve ${contact.input}`}
+                >
+                  <span className="block truncate text-xs font-medium">{contact.name}</span>
+                  <span className="block truncate font-mono text-[11px] text-muted-foreground">{contact.input}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => inspectCounterparty(contact)}
+                  aria-label={`Refresh ${contact.name}`}
+                  title="Refresh resolution"
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSavedCounterparties((current) => current.filter((saved) => saved.input !== contact.input))}
+                  aria-label={`Remove ${contact.name}`}
+                  title="Remove from address book"
+                  className="text-muted-foreground hover:text-destructive"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {input.trim() && inputTypeLabel && !loading && (
         <p className="text-xs text-muted-foreground mb-4 -mt-3">
@@ -735,6 +834,25 @@ export function FederationTool() {
 
       {!loading && !error && hasResults && (
         <div className="space-y-4">
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="flex-1 text-xs text-muted-foreground">
+              Save this counterparty
+              <input
+                value={counterpartyName}
+                onChange={(event) => setCounterpartyName(event.target.value)}
+                placeholder="Name (optional)"
+                className="mt-1 block w-full rounded-md border border-input bg-background px-3 py-2 text-xs"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={saveCounterparty}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-xs font-medium hover:border-foreground/30"
+            >
+              <BookmarkPlus className="h-3.5 w-3.5" />
+              Save counterparty
+            </button>
+          </div>
           {fedData && <FederationPanel data={fedData} copied={copied} copy={copy} />}
           {tomlData && <TomlPanel data={tomlData} copied={copied} copy={copy} />}
           {sepData && <SepPanel data={sepData} />}

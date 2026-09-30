@@ -2,10 +2,14 @@
 
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
+import { useTheme } from '@/lib/theme-context';
 import { CommandPaletteTrigger } from '@/components/command-palette';
+import { Monitor, Moon, Sun } from 'lucide-react';
 
 export function SiteHeader() {
   const { user, loading, logout } = useAuth();
+  const { mode, setMode } = useTheme();
+  const ThemeIcon = mode === 'system' ? Monitor : mode === 'dark' ? Moon : Sun;
 
   return (
     <div className="border-b border-border">
@@ -29,6 +33,20 @@ export function SiteHeader() {
             </Link>
           </nav>
           <CommandPaletteTrigger />
+          <label className="inline-flex items-center gap-1.5 text-muted-foreground" title="Color theme">
+            <ThemeIcon className="h-4 w-4" aria-hidden="true" />
+            <span className="sr-only">Color theme</span>
+            <select
+              aria-label="Color theme"
+              value={mode}
+              onChange={(event) => setMode(event.target.value as 'light' | 'dark' | 'system')}
+              className="bg-transparent text-xs focus:outline-none"
+            >
+              <option value="system">System</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
 
           <div className="flex items-center gap-4 text-sm">
             <Link href="/settings" className="text-muted-foreground hover:text-foreground transition-colors">
