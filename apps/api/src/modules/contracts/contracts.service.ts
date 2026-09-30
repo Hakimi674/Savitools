@@ -107,7 +107,7 @@ export class ContractsService {
     if (isProduction && rpcUrl.startsWith("http://")) {
       throw new ConfigurationError(
         "Plaintext RPC (http) is not allowed for production signing",
-      );
+      });
     }
 
     this.isProduction = isProduction;
