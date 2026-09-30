@@ -16,6 +16,7 @@ import * as os from 'os';
 import { execFile } from 'child_process';
 import { Queue, QueueEvents, Worker } from 'bullmq';
 import { assertPublicHostname } from '../../common/ssrf-guard';
+import { ConfigurationError } from '../../common/errors/configuration.error';
 import { AbiCatalogEntry, buildAbiCatalog, encodeAbiArgument } from './abi-catalog';
 import { AttachAbiDto, ABI_MAX_BYTES } from './dto/attach-abi.dto';
 import {
@@ -104,7 +105,7 @@ export class ContractsService {
       network.toLowerCase() === "public";
 
     if (isProduction && rpcUrl.startsWith("http://")) {
-      throw new Error(
+      throw new ConfigurationError(
         "Plaintext RPC (http) is not allowed for production signing",
       );
     }

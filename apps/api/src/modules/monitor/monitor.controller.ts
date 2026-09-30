@@ -12,6 +12,7 @@ import {
   UseGuards,
   BadRequestException,
   NotFoundException,
+  ServiceUnavailableException,
   Logger,
   OnModuleDestroy,
 } from '@nestjs/common';
@@ -24,6 +25,7 @@ import { SearchEventsQueryDto } from './dto/search-events.dto';
 import { ExportEventsQueryDto } from './dto/export-events.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser, AuthUser } from '../auth/decorators/current-user.decorator';
+import { toCsvRow } from '../../common/csv';
 import { MonitorLeaderService } from './monitor-leader.service';
 import { MonitorRuntimeConfig } from './monitor-runtime.config';
 import { StreamManager } from './stream-manager.service';
@@ -126,12 +128,9 @@ export class MonitorController implements OnModuleDestroy {
     // silently differ from the configured value.
     const maxConns = this.runtime.maxSseConnections;
     if (this.activeSseConnections >= maxConns) {
-      reply.status(HttpStatus.SERVICE_UNAVAILABLE).send({
-        statusCode: HttpStatus.SERVICE_UNAVAILABLE,
-        message: 'Maximum SSE connections reached',
-        error: 'Service Unavailable',
-      });
-      return;
+      // Thrown rather than hand-built: the global ApiExceptionFilter owns the
+      // error envelope, so this response cannot drift from every other error.
+      throw new ServiceUnavailableException('Maximum SSE connections reached');
     }
 
     this.activeSseConnections++;
@@ -295,7 +294,7 @@ export class MonitorController implements OnModuleDestroy {
         query,
         (values) => {
           reply.raw.write(
-            `${values.map((value) => this.csvEscape(value)).join(',')}\r\n`,
+            `${toCsvRow(values)}\r\n`,
           );
         },
         () => {
@@ -308,16 +307,6 @@ export class MonitorController implements OnModuleDestroy {
       );
       if (!reply.raw.writableEnded) reply.raw.end();
     }
-  }
-
-  /** RFC 4180 quoting for a single CSV field. */
-  private csvEscape(value: string | number | null): string {
-    if (value === null || value === undefined) return '';
-    const str = String(value);
-    if (/[",\r\n]/.test(str)) {
-      return `"${str.replace(/"/g, '""')}"`;
-    }
-    return str;
   }
 
   /** Reject non-ISO date filters with 400 before they reach the service. */
