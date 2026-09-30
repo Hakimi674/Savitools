@@ -43,6 +43,14 @@ function normalizeDomain(domain: string): string {
   return stripProtocol(domain.trim()).replace(/\.$/, '').toLowerCase();
 }
 
+function normalizeHomeDomain(domain: string): string {
+  const normalized = domain.trim().replace(/\.$/, '').toLowerCase();
+  if (!isDomain(normalized)) {
+    throw new BadRequestException(`Invalid domain: ${domain}`);
+  }
+  return normalized;
+}
+
 function positiveInteger(value: unknown, fallback: number): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
@@ -116,6 +124,13 @@ export interface TomlResult {
   documentation: TomlDocumentation | null;
   fetchLatencyMs: number;
   validationWarnings: string[];
+}
+
+export interface HomeDomainValidationResult {
+  valid: boolean;
+  domain: string;
+  issuer: string;
+  reason: 'issuer_not_declared' | 'home_domain_mismatch' | null;
 }
 
 export interface SepInfo {
@@ -501,16 +516,16 @@ export class FederationService {
       directPaymentServer:
         (parsed.DIRECT_PAYMENT_SERVER as string) ?? null,
       accounts: Array.isArray(parsed.ACCOUNTS)
-        ? (parsed.ACCOUNTS as Record<string, unknown>[]).map((a) => ({
-            PUBLIC_KEY: String(a.PUBLIC_KEY ?? ''),
-            NAME: a.NAME ? String(a.NAME) : undefined,
-            HOME_DOMAIN: a.HOME_DOMAIN
-              ? String(a.HOME_DOMAIN)
-              : undefined,
-            DESCRIPTION: a.DESCRIPTION
-              ? String(a.DESCRIPTION)
-              : undefined,
-          }))
+        ? (parsed.ACCOUNTS as Array<string | Record<string, unknown>>).map((a) =>
+            typeof a === 'string'
+              ? { PUBLIC_KEY: a }
+              : {
+                  PUBLIC_KEY: String(a.PUBLIC_KEY ?? ''),
+                  NAME: a.NAME ? String(a.NAME) : undefined,
+                  HOME_DOMAIN: a.HOME_DOMAIN ? String(a.HOME_DOMAIN) : undefined,
+                  DESCRIPTION: a.DESCRIPTION ? String(a.DESCRIPTION) : undefined,
+                },
+          )
         : [],
       currencies: Array.isArray(parsed.CURRENCIES)
         ? (parsed.CURRENCIES as Record<string, unknown>[]).map((c) => ({
@@ -597,6 +612,74 @@ export class FederationService {
         : null,
       fetchLatencyMs: toml.fetchLatencyMs,
       validationWarnings,
+    };
+  }
+
+  async validateHomeDomain(
+    domain: string,
+    issuer: string,
+  ): Promise<HomeDomainValidationResult> {
+    const cleanDomain = normalizeHomeDomain(domain);
+    if (!isPublicKey(issuer)) {
+      throw new BadRequestException('issuer must be a Stellar public key');
+    }
+
+    const toml = await this.fetchToml(cleanDomain);
+    const accounts = Array.isArray(toml.ACCOUNTS)
+      ? (toml.ACCOUNTS as Array<string | Record<string, unknown>>)
+      : [];
+    const account = accounts.find((item) =>
+      typeof item === 'string' ? item === issuer : item.PUBLIC_KEY === issuer,
+    );
+    if (!account) {
+      return { valid: false, domain: cleanDomain, issuer, reason: 'issuer_not_declared' };
+    }
+    const declaredHomeDomain = typeof account === 'string' ? undefined : account.HOME_DOMAIN;
+    if (typeof declaredHomeDomain === 'string' && normalizeDomain(declaredHomeDomain) !== cleanDomain) {
+      return { valid: false, domain: cleanDomain, issuer, reason: 'home_domain_mismatch' };
+    }
+    return { valid: true, domain: cleanDomain, issuer, reason: null };
+  }
+
+  async getAssetMetadata(domain: string, code: string, issuer: string): Promise<TomlCurrency> {
+    const cleanDomain = normalizeHomeDomain(domain);
+    if (!/^[a-zA-Z0-9]{1,12}$/.test(code)) {
+      throw new BadRequestException('code must be a 1-12 character alphanumeric asset code');
+    }
+    if (!isPublicKey(issuer)) {
+      throw new BadRequestException('issuer must be a Stellar public key');
+    }
+
+    const toml = await this.fetchToml(cleanDomain);
+    const currencies = Array.isArray(toml.CURRENCIES)
+      ? (toml.CURRENCIES as Record<string, unknown>[])
+      : [];
+    const currency = currencies.find((item) => item.CODE === code && item.ISSUER === issuer);
+    if (!currency) {
+      throw new NotFoundException(`Asset ${code}:${issuer} is not declared by ${cleanDomain}`);
+    }
+
+    const validation = await this.validateHomeDomain(cleanDomain, issuer);
+    if (!validation.valid) {
+      throw new BadRequestException(
+        `Issuer ${issuer} is not verified for home domain ${cleanDomain}: ${validation.reason}`,
+      );
+    }
+    return {
+      code: String(currency.CODE),
+      issuer: String(currency.ISSUER),
+      display_decimals: currency.DISPLAY_DECIMALS == null ? undefined : Number(currency.DISPLAY_DECIMALS),
+      name: typeof currency.NAME === 'string' ? currency.NAME : undefined,
+      desc: typeof currency.DESC === 'string' ? currency.DESC : undefined,
+      conditions: typeof currency.CONDITIONS === 'string' ? currency.CONDITIONS : undefined,
+      image: typeof currency.IMAGE === 'string' ? currency.IMAGE : undefined,
+      anchor_asset_type: typeof currency.ANCHOR_ASSET_TYPE === 'string' ? currency.ANCHOR_ASSET_TYPE : undefined,
+      anchor_asset: typeof currency.ANCHOR_ASSET === 'string' ? currency.ANCHOR_ASSET : undefined,
+      redemption_instructions: typeof currency.REDEMPTION_INSTRUCTIONS === 'string' ? currency.REDEMPTION_INSTRUCTIONS : undefined,
+      collateral_addresses: typeof currency.COLLATERAL_ADDRESSES === 'string' ? currency.COLLATERAL_ADDRESSES : undefined,
+      regulated: typeof currency.REGULATED === 'boolean' ? currency.REGULATED : undefined,
+      approval_server: typeof currency.APPROVAL_SERVER === 'string' ? currency.APPROVAL_SERVER : undefined,
+      approval_criteria: typeof currency.APPROVAL_CRITERIA === 'string' ? currency.APPROVAL_CRITERIA : undefined,
     };
   }
 

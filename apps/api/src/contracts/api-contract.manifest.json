@@ -209,6 +209,11 @@
     },
     {
       "method": "GET",
+      "path": "/api/v1/federation/asset-metadata",
+      "auth": "public"
+    },
+    {
+      "method": "GET",
       "path": "/api/v1/federation/link-preview",
       "auth": "public"
     },
@@ -225,6 +230,11 @@
     {
       "method": "GET",
       "path": "/api/v1/federation/toml",
+      "auth": "public"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/federation/validate-home-domain",
       "auth": "public"
     },
     {

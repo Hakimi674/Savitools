@@ -1,14 +1,18 @@
 'use client';
 
 import {
+  fetchAssetMetadata,
   fetchSepSupport,
   fetchStellarToml,
   previewTransferLink,
   resolveFederation,
+  validateHomeDomain,
   type FederationResolveResult,
+  type HomeDomainValidationResult,
   type SepResult,
   type TomlResult,
   type TransferLinkResult,
+  type TomlCurrency,
 } from '@/lib/api';
 import {
   BookmarkPlus,
@@ -590,6 +594,63 @@ function SepPanel({ data }: { data: SepResult }) {  return (
   );
 }
 
+function AssetMetadataLookup() {
+  const [domain, setDomain] = useState('');
+  const [code, setCode] = useState('');
+  const [issuer, setIssuer] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [validation, setValidation] = useState<HomeDomainValidationResult | null>(null);
+  const [metadata, setMetadata] = useState<TomlCurrency | null>(null);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setLoading(true);
+    setError(null);
+    setValidation(null);
+    setMetadata(null);
+    try {
+      const result = await validateHomeDomain(domain.trim(), issuer.trim());
+      setValidation(result);
+      if (result.valid) {
+        setMetadata(await fetchAssetMetadata(domain.trim(), code.trim(), issuer.trim()));
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Asset metadata lookup failed.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <section className="mb-6 rounded-lg border border-border p-4">
+      <h2 className="text-sm font-semibold">Asset metadata and home-domain check</h2>
+      <p className="mt-1 text-xs text-muted-foreground">Reads public asset details from stellar.toml and checks the issuer is declared by that domain.</p>
+      <form onSubmit={submit} className="mt-3 grid gap-2 sm:grid-cols-2">
+        <input aria-label="Asset home domain" required value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="Home domain (example.com)" className="rounded-md border border-border bg-background px-3 py-2 text-sm" />
+        <input aria-label="Asset code" required maxLength={12} value={code} onChange={(e) => setCode(e.target.value)} placeholder="Asset code (USDC)" className="rounded-md border border-border bg-background px-3 py-2 text-sm" />
+        <input aria-label="Asset issuer" required value={issuer} onChange={(e) => setIssuer(e.target.value)} placeholder="Issuer public key (G…)" className="rounded-md border border-border bg-background px-3 py-2 text-sm font-mono sm:col-span-2" />
+        <button type="submit" disabled={loading || !domain.trim() || !code.trim() || !issuer.trim()} className="justify-self-start rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-40 sm:col-span-2">
+          {loading ? 'Checking…' : 'Check asset'}
+        </button>
+      </form>
+      {error && <p role="alert" className="mt-3 text-sm text-red-400">{error}</p>}
+      {validation && <p role="status" className={`mt-3 text-sm ${validation.valid ? 'text-green-400' : 'text-amber-400'}`}>
+        {validation.valid ? `Issuer is declared for ${validation.domain}.` : `Home-domain check failed: ${validation.reason === 'issuer_not_declared' ? 'issuer is not listed in ACCOUNTS.' : 'issuer HOME_DOMAIN does not match.'}`}
+      </p>}
+      {metadata && <dl className="mt-3 grid gap-x-3 gap-y-1 text-sm sm:grid-cols-[max-content_1fr]">
+        <dt className="text-muted-foreground">Asset</dt><dd>{metadata.code} · {metadata.issuer}</dd>
+        {metadata.name && <><dt className="text-muted-foreground">Name</dt><dd>{metadata.name}</dd></>}
+        {metadata.desc && <><dt className="text-muted-foreground">Description</dt><dd>{metadata.desc}</dd></>}
+        {metadata.display_decimals !== undefined && <><dt className="text-muted-foreground">Display decimals</dt><dd>{metadata.display_decimals}</dd></>}
+        {metadata.conditions && <><dt className="text-muted-foreground">Conditions</dt><dd>{metadata.conditions}</dd></>}
+        {metadata.anchor_asset && <><dt className="text-muted-foreground">Anchor asset</dt><dd>{metadata.anchor_asset}</dd></>}
+        {metadata.image && <><dt className="text-muted-foreground">Image URL</dt><dd className="break-all">{metadata.image}</dd></>}
+      </dl>}
+    </section>
+  );
+}
+
 export function FederationTool() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -724,6 +785,7 @@ export function FederationTool() {
 
   return (
     <div>
+      <AssetMetadataLookup />
       <form onSubmit={handleSubmit} className="flex gap-2 mb-6">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
