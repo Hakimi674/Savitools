@@ -26,6 +26,7 @@ import { Sep10Module } from "./modules/sep10/sep10.module";
 import { SorobanStorageModule } from "./modules/soroban-storage/soroban-storage.module";
 import { StellarTomlModule } from "./modules/stellar-toml/stellar-toml.module";
 import { SequencePlannerModule } from "./modules/sequence-planner/sequence-planner.module";
+import { SorobanRpcModule } from "./modules/soroban-rpc/soroban-rpc.module";
 import { DataSource } from "typeorm";
 import { ALL_ENTITIES, ALL_MIGRATIONS } from "./database/database.registry";
 import { validateEnvironment } from "./config/env-validation";
@@ -90,6 +91,7 @@ ThrottlerModule.forRootAsync({
     SorobanStorageModule,
     StellarTomlModule,
     SequencePlannerModule,
+    SorobanRpcModule,
   ],
   controllers: [AppController],
   providers: [

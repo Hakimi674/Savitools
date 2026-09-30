@@ -156,6 +156,21 @@ jobs:
             if curl --fail --silent --max-time 3 http://127.0.0.1:3001/api/v1/health > /dev/null \
               && [ "$(docker inspect --format '{{.State.Health.Status}}' savitools-api-smoke)" = healthy ]; then
               echo 'API returned HTTP 200 and the image health check is healthy'
+
+              # The bundled OpenAPI specs are build assets (see
+              # apps/api/nest-cli.json). If they are not copied into dist this
+              # endpoint 404s, so assert it actually generates code from the
+              # fluxa spec instead of only checking that the port answers.
+              sdk_response="$(curl --fail --silent --show-error --max-time 20 \
+                --header 'content-type: application/json' \
+                --data '{"spec":"fluxa","language":"typescript"}' \
+                http://127.0.0.1:3001/api/v1/sdkgen/generate)"
+              if ! printf '%s' "$sdk_response" | grep -q '/v1/transfers'; then
+                echo "sdkgen/generate did not return generated code: $sdk_response"
+                docker logs savitools-api-smoke
+                exit 1
+              fi
+              echo 'POST /api/v1/sdkgen/generate returned code generated from the bundled fluxa spec'
               exit 0
             fi
             if [ "$(docker inspect --format '{{.State.Status}}' savitools-api-smoke)" != running ]; then

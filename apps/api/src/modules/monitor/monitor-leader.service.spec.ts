@@ -16,7 +16,7 @@ describe('MonitorLeaderService', () => {
   }
 
   it('elects exactly one leader among multiple competing replicas', async () => {
-    let now = 1_000_000;
+    const now = 1_000_000;
     const store = createInMemoryMonitorLockStore(() => now);
     const runtime = makeRuntime({ MONITOR_LEADER_LEASE_MS: '1000' });
 
@@ -56,7 +56,7 @@ describe('MonitorLeaderService', () => {
   });
 
   it('transfers leadership when the current leader releases its lease on shutdown', async () => {
-    let now = 1_000_000;
+    const now = 1_000_000;
     const store = createInMemoryMonitorLockStore(() => now);
     const runtime = makeRuntime({ MONITOR_LEADER_LEASE_MS: '1000' });
 

@@ -29,6 +29,8 @@ SaviTools is a standalone product in the [Savitura](https://savitura.com) ecosys
 | **Account Graph**         | Visualize signer networks, offers, and payment relationships with a force-directed graph | MVP |
 | **Contract Events**       | Decode, filter, and replay Soroban contract events from raw ScVal XDR                 | MVP    |
 
+See the [Contract Events guide](docs/contract-events.md) for filter criteria, limits, and API usage.
+
 ---
 
 ## Architecture

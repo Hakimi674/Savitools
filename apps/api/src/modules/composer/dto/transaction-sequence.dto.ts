@@ -4,7 +4,6 @@ import {
   IsBoolean,
   IsIn,
   IsInt,
-  IsObject,
   IsOptional,
   IsString,
   Min,
@@ -15,6 +14,7 @@ export class OperationInputDto {
   @IsString()
   type: string;
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- operation fields are arbitrary JSON keyed by field name
   [key: string]: any;
 }
 
@@ -29,6 +29,7 @@ export class SourceReferenceDto {
 }
 
 export class TransactionStepInputDto {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- either an account string or a {step, field} reference
   source: any;
 
   @IsArray()

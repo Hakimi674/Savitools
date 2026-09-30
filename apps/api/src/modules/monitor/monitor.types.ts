@@ -43,7 +43,64 @@ export type StellarNetwork = 'testnet' | 'public';
 export type StreamMode = 'sse' | 'poll';
 export type StreamStatus = 'streaming' | 'polling' | 'error';
 export type EventSource = 'transaction' | 'payment' | 'contract';
-export type DeliveryStatus = 'pending' | 'delivered' | 'failed' | 'retrying';
+export type DeliveryStatus =
+  | 'pending'
+  | 'delivered'
+  | 'failed'
+  | 'retrying'
+  | 'held'
+  | 'claimed';
+
+export interface UserDigestPreferences {
+  digestEnabled: boolean;
+  digestIntervalMinutes: number;
+  timezone: string;
+  quietHoursEnabled: boolean;
+  quietHoursStart: string;
+  quietHoursEnd: string;
+  maxDigestAlerts: number;
+}
+
+export interface DigestAlertEntry {
+  id: string;
+  ruleId: string;
+  ruleType: string;
+  watchId: string;
+  watchLabel: string;
+  createdAt: string;
+  isUnresolved: boolean;
+  isRefiring: boolean;
+  summary: string;
+  payload: Record<string, unknown>;
+}
+
+export interface DigestRuleGroup {
+  ruleId: string;
+  ruleType: string;
+  totalAlerts: number;
+  unresolvedCount: number;
+  refiringCount: number;
+  alerts: DigestAlertEntry[];
+  truncatedCount: number;
+}
+
+export interface DigestWatchGroup {
+  watchId: string;
+  watchLabel: string;
+  publicKey: string;
+  rules: DigestRuleGroup[];
+  totalAlerts: number;
+}
+
+export interface DigestPayload {
+  flushId: string;
+  timestamp: string;
+  timezone: string;
+  totalAlerts: number;
+  displayedAlerts: number;
+  summarizedCount: number;
+  groups: DigestWatchGroup[];
+}
 
 export interface AlertRuleDefinition {
   id: string;

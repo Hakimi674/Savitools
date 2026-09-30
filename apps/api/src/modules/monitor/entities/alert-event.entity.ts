@@ -59,6 +59,15 @@ export class AlertEvent {
   @Column({ name: 'delivered_at', type: 'timestamptz', nullable: true })
   deliveredAt!: Date | null;
 
+  @Column({ name: 'claimed_at', type: 'timestamptz', nullable: true })
+  claimedAt!: Date | null;
+
+  @Column({ name: 'claimed_by', type: 'varchar', nullable: true })
+  claimedBy!: string | null;
+
+  @Column({ name: 'claim_key', type: 'varchar', nullable: true })
+  claimKey!: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 }

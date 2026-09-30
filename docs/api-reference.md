@@ -54,6 +54,30 @@ curl -X POST http://localhost:3001/api/v1/auth/refresh \
 
 ## Endpoint Catalog
 
+### Federation asset metadata and home-domain validation
+
+These public, read-only endpoints inspect the domain's `/.well-known/stellar.toml`. They do not store results or require a user session. TOML responses use the existing five-minute, bounded in-memory cache (up to 200 domains); concurrent requests for the same domain share a fetch. Fetches retain the federation module's timeout, response-size, redirect, and public-host SSRF limits. No secrets are accepted or returned.
+
+#### GET `/federation/validate-home-domain?domain=example.com&issuer=G...`
+
+Checks the issuer key appears in the domain's `ACCOUNTS` array. An optional account `HOME_DOMAIN` value must also match the normalized domain. A mismatch is returned as a successful validation result with `valid: false`; malformed inputs use the standard `400` error envelope and an unavailable TOML uses the existing federation error responses.
+
+**Response (200):**
+```json
+{ "valid": true, "domain": "example.com", "issuer": "G...", "reason": null }
+```
+
+#### GET `/federation/asset-metadata?domain=example.com&code=USDC&issuer=G...`
+
+Returns the matching `[[CURRENCIES]]` metadata only when the issuer passes the home-domain check. Asset codes must contain 1–12 ASCII letters or digits and issuer must be a Stellar public key. An undeclared currency returns `404`; an issuer that fails domain validation returns `400`.
+
+**Response (200):**
+```json
+{ "code": "USDC", "issuer": "G...", "name": "USD Coin", "display_decimals": 7 }
+```
+
+The existing `FEDERATION_TOML_CACHE_TTL_MS` and `FEDERATION_TOML_CACHE_MAX_ENTRIES` settings control cache behavior (defaults: 5 minutes and 200 domains). TOML fetches have a 15-second timeout. `FEDERATION_REQUEST_TIMEOUT_MS` (default 5 seconds) is the overall SEP inspection deadline; `FEDERATION_PROBE_TIMEOUT_MS` (default 3 seconds) bounds each endpoint probe. Invalid or non-positive setting values use their defaults. TOML payloads are limited to 512 KiB, nesting depth 64, and 10,000 parsed keys.
+
 ### Health & Status
 
 #### GET `/health`
@@ -902,6 +926,30 @@ curl "http://localhost:3001/api/v1/network/status/history?network=testnet"
 ---
 
 ### Contracts (Soroban)
+
+#### GET `/contracts/events`
+
+Fetch and decode Soroban events for a contract. This read-only endpoint does not require authentication.
+
+**Query parameters:** `contractId` (required), `network` (`testnet` or `mainnet`, default `testnet`), `type` (`contract`, `system`, or `diagnostic`), `startLedger` or `cursor` (mutually exclusive), `endLedger`, and `limit` (1–200).
+
+#### POST `/contracts/events/filter`
+
+Filter decoded events in memory. The request accepts up to 1,000 events and 10 criteria. Criteria are ANDed. Text criteria (`topic_contains`, `value_type_is`, `value_equals`) require a non-empty `value` of at most 256 characters. A `ledger_range` requires `from` or `to`; supplied bounds must be non-negative safe integers and `from` must not exceed `to`. Invalid criteria return `400`.
+
+```json
+{
+  "events": [],
+  "criteria": [
+    { "kind": "topic_contains", "value": "transfer" },
+    { "kind": "ledger_range", "from": 100, "to": 200 }
+  ]
+}
+```
+
+#### POST `/contracts/events/replay`
+
+Replay filtered events to a webhook. This endpoint requires authentication; URLs are checked against SSRF protections. See the [Contract Events guide](contract-events.md).
 
 #### POST `/contracts/deploy`
 

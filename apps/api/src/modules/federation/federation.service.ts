@@ -7,8 +7,10 @@ import {
   PayloadTooLargeException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { BoundedTtlMap } from '../../common/bounded-ttl-map';
 import * as smolToml from 'smol-toml';
 import { assertPublicHostname, MAX_SAFE_REDIRECTS } from '../../common/ssrf-guard';
+import { isStellarPublicKey } from '../../common/stellar-address';
 
 const FETCH_TIMEOUT = 15_000;
 export const DEFAULT_FEDERATION_PROBE_TIMEOUT_MS = 3_000;
@@ -23,10 +25,6 @@ export const TOML_MAX_BYTES = 512 * 1024;
 export const TOML_MAX_DEPTH = 64;
 /** Hard cap on keys produced by a single document. */
 export const TOML_MAX_KEYS = 10_000;
-
-function isPublicKey(input: string): boolean {
-  return /^G[A-Z2-7]{55}$/.test(input);
-}
 
 function isFederationAddress(input: string): boolean {
   return /^[^\s*]+[*][^\s*]+\.[^\s*]+$/.test(input);
@@ -44,6 +42,14 @@ function stripProtocol(domain: string): string {
 
 function normalizeDomain(domain: string): string {
   return stripProtocol(domain.trim()).replace(/\.$/, '').toLowerCase();
+}
+
+function normalizeHomeDomain(domain: string): string {
+  const normalized = domain.trim().replace(/\.$/, '').toLowerCase();
+  if (!isDomain(normalized)) {
+    throw new BadRequestException(`Invalid domain: ${domain}`);
+  }
+  return normalized;
 }
 
 function positiveInteger(value: unknown, fallback: number): number {
@@ -121,6 +127,13 @@ export interface TomlResult {
   validationWarnings: string[];
 }
 
+export interface HomeDomainValidationResult {
+  valid: boolean;
+  domain: string;
+  issuer: string;
+  reason: 'issuer_not_declared' | 'home_domain_mismatch' | null;
+}
+
 export interface SepInfo {
   number: number;
   name: string;
@@ -138,7 +151,6 @@ export interface SepResult {
 interface CachedToml {
   parsed: Record<string, unknown>;
   fetchLatencyMs: number;
-  expiresAt: number;
 }
 
 // ─── Transfer request links (Savitura/Savitools#217) ────────────────────────
@@ -164,10 +176,110 @@ export interface TransferLinkResult {
   warning: string;
 }
 
-const PUBLIC_KEY_RE = /^G[A-Z2-7]{55}$/;
 /** Decimal string only — never routed through Number to avoid float conversion. */
 const DECIMAL_STRING_RE = /^\d+(\.\d+)?$/;
 const HTTPS_URL_RE = /^https:\/\/[^\s]+$/i;
+
+// ─── Server diagnostics (Savitura/Savitools#341) ────────────────────────────
+
+export type DiagnosticStageName =
+  | 'toml'
+  | 'http'
+  | 'forward-lookup'
+  | 'reverse-lookup';
+
+export type DiagnosticFailureKind =
+  | 'dns'
+  | 'toml'
+  | 'tls'
+  | 'http'
+  | 'timeout'
+  | 'schema'
+  | 'ssrf'
+  | 'redirects';
+
+/** One probed step of the diagnostic run. */
+export interface DiagnosticStage {
+  stage: DiagnosticStageName;
+  ok: boolean;
+  latencyMs?: number;
+  error?: DiagnosticFailureKind;
+  details: Record<string, unknown>;
+  redirectChain?: string[];
+}
+
+/** Redacted, copy-safe diagnostic report. */
+export interface FederationDiagnosticsReport {
+  domain: string;
+  checkedAt: string;
+  ok: boolean;
+  totalLatencyMs: number;
+  serverUrl?: string;
+  serverStatus?: number | null;
+  forwardStatus?: number | null;
+  reverseStatus?: number | null;
+  stages: DiagnosticStage[];
+  failures: DiagnosticFailureKind[];
+}
+
+/** Map any thrown error from the fetch path onto a failure kind. */
+function classifyError(error: unknown): DiagnosticFailureKind {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof RequestTimeoutError || /timed out/i.test(message)) return 'timeout';
+  if (/non-public address/i.test(message)) return 'ssrf';
+  if (/Could not resolve host/i.test(message)) return 'dns';
+  if (/Unsupported protocol/i.test(message)) return 'tls';
+  if (error instanceof BadGatewayException || /Too many redirects|redirect loop|redirect/i.test(message)) {
+    return 'redirects';
+  }
+  if (error instanceof NotFoundException) return 'toml';
+  // The bounded TOML parser reports malformed/oversized documents as 400s.
+  if (error instanceof BadRequestException && /Malformed TOML|TOML document|stellar\.toml/i.test(message)) {
+    return 'toml';
+  }
+  return 'http';
+}
+
+/** Append query parameters, preserving any existing path on the server URL. */
+function appendQuery(serverUrl: string, params: Record<string, string>): string {
+  const url = new URL(serverUrl);
+  for (const [key, value] of Object.entries(params)) {
+    url.searchParams.set(key, value);
+  }
+  return url.toString();
+}
+
+/** Strip query strings from a URL so reports stay copy-safe. */
+function redactUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return '(unparseable URL)';
+  }
+}
+
+/** Redact request URLs in-place before the report leaves the service. */
+function redactReport(report: FederationDiagnosticsReport): FederationDiagnosticsReport {
+  return {
+    ...report,
+    stages: report.stages.map((stage) => ({
+      ...stage,
+      details: Object.fromEntries(
+        Object.entries(stage.details).map(([key, value]) =>
+          typeof value === 'string' && /^https?:\/\//.test(value) && key !== 'serverUrl'
+            ? [key, redactUrl(value)]
+            : [key, value],
+        ),
+      ),
+    })),
+  };
+}
+
+/** Deterministic probe user for diagnostics — never a real account. */
+function probeQuery(domain: string): string {
+  return `savitools-diagnostic*${domain}`;
+}
 
 const REQUIRED_TOML_FIELDS = ['ACCOUNTS'] as const;
 
@@ -237,10 +349,21 @@ function parseBoundedToml(raw: string): Record<string, unknown> {
 @Injectable()
 export class FederationService {
   private readonly logger = new Logger(FederationService.name);
-  private readonly tomlCache = new Map<string, CachedToml>();
+  /**
+   * Process-local stellar.toml cache. `BoundedTtlMap` owns both the entry bound
+   * and the TTL, so this class no longer hand-rolls an LRU trim next to an
+   * `expiresAt` field (Savitura/Savitools#291). The in-flight map is a
+   * de-duplicator, not a cache: entries leave it in the same request.
+   */
+  private readonly tomlCache: BoundedTtlMap<string, CachedToml>;
   private readonly tomlInFlight = new Map<string, Promise<CachedToml>>();
 
-  constructor(private readonly configService?: ConfigService) {}
+  constructor(private readonly configService?: ConfigService) {
+    this.tomlCache = new BoundedTtlMap({
+      maxEntries: this.tomlCacheMaxEntries,
+      ttlMs: this.tomlCacheTtlMs,
+    });
+  }
 
   private get probeTimeoutMs(): number {
     return positiveInteger(
@@ -274,9 +397,11 @@ export class FederationService {
     urlStr: string,
     timeout = FETCH_TIMEOUT,
     parentSignal?: AbortSignal,
+    redirectChain: string[] = [],
   ): Promise<Response> {
     let target = new URL(urlStr);
-    
+    redirectChain.push(target.toString());
+
     if (target.protocol !== 'https:' && target.protocol !== 'http:') {
       throw new BadRequestException(`Unsupported protocol: ${target.protocol}`);
     }
@@ -318,6 +443,7 @@ export class FederationService {
           throw new BadGatewayException('Too many redirects');
         }
         target = new URL(response.headers.get('location')!, target);
+        redirectChain.push(target.toString());
         if (target.protocol !== 'https:' && target.protocol !== 'http:') {
           throw new BadRequestException(`Unsupported protocol in redirect: ${target.protocol}`);
         }
@@ -376,7 +502,7 @@ export class FederationService {
   ): Promise<FederationResolveResult> {
     const input = address.trim();
 
-    if (isPublicKey(input)) {
+    if (isStellarPublicKey(input)) {
       return this.reverseLookup(input);
     }
 
@@ -505,16 +631,16 @@ export class FederationService {
       directPaymentServer:
         (parsed.DIRECT_PAYMENT_SERVER as string) ?? null,
       accounts: Array.isArray(parsed.ACCOUNTS)
-        ? (parsed.ACCOUNTS as Record<string, unknown>[]).map((a) => ({
-            PUBLIC_KEY: String(a.PUBLIC_KEY ?? ''),
-            NAME: a.NAME ? String(a.NAME) : undefined,
-            HOME_DOMAIN: a.HOME_DOMAIN
-              ? String(a.HOME_DOMAIN)
-              : undefined,
-            DESCRIPTION: a.DESCRIPTION
-              ? String(a.DESCRIPTION)
-              : undefined,
-          }))
+        ? (parsed.ACCOUNTS as Array<string | Record<string, unknown>>).map((a) =>
+            typeof a === 'string'
+              ? { PUBLIC_KEY: a }
+              : {
+                  PUBLIC_KEY: String(a.PUBLIC_KEY ?? ''),
+                  NAME: a.NAME ? String(a.NAME) : undefined,
+                  HOME_DOMAIN: a.HOME_DOMAIN ? String(a.HOME_DOMAIN) : undefined,
+                  DESCRIPTION: a.DESCRIPTION ? String(a.DESCRIPTION) : undefined,
+                },
+          )
         : [],
       currencies: Array.isArray(parsed.CURRENCIES)
         ? (parsed.CURRENCIES as Record<string, unknown>[]).map((c) => ({
@@ -601,6 +727,74 @@ export class FederationService {
         : null,
       fetchLatencyMs: toml.fetchLatencyMs,
       validationWarnings,
+    };
+  }
+
+  async validateHomeDomain(
+    domain: string,
+    issuer: string,
+  ): Promise<HomeDomainValidationResult> {
+    const cleanDomain = normalizeHomeDomain(domain);
+    if (!isStellarPublicKey(issuer)) {
+      throw new BadRequestException('issuer must be a Stellar public key');
+    }
+
+    const toml = await this.fetchToml(cleanDomain);
+    const accounts = Array.isArray(toml.ACCOUNTS)
+      ? (toml.ACCOUNTS as Array<string | Record<string, unknown>>)
+      : [];
+    const account = accounts.find((item) =>
+      typeof item === 'string' ? item === issuer : item.PUBLIC_KEY === issuer,
+    );
+    if (!account) {
+      return { valid: false, domain: cleanDomain, issuer, reason: 'issuer_not_declared' };
+    }
+    const declaredHomeDomain = typeof account === 'string' ? undefined : account.HOME_DOMAIN;
+    if (typeof declaredHomeDomain === 'string' && normalizeDomain(declaredHomeDomain) !== cleanDomain) {
+      return { valid: false, domain: cleanDomain, issuer, reason: 'home_domain_mismatch' };
+    }
+    return { valid: true, domain: cleanDomain, issuer, reason: null };
+  }
+
+  async getAssetMetadata(domain: string, code: string, issuer: string): Promise<TomlCurrency> {
+    const cleanDomain = normalizeHomeDomain(domain);
+    if (!/^[a-zA-Z0-9]{1,12}$/.test(code)) {
+      throw new BadRequestException('code must be a 1-12 character alphanumeric asset code');
+    }
+    if (!isStellarPublicKey(issuer)) {
+      throw new BadRequestException('issuer must be a Stellar public key');
+    }
+
+    const toml = await this.fetchToml(cleanDomain);
+    const currencies = Array.isArray(toml.CURRENCIES)
+      ? (toml.CURRENCIES as Record<string, unknown>[])
+      : [];
+    const currency = currencies.find((item) => item.CODE === code && item.ISSUER === issuer);
+    if (!currency) {
+      throw new NotFoundException(`Asset ${code}:${issuer} is not declared by ${cleanDomain}`);
+    }
+
+    const validation = await this.validateHomeDomain(cleanDomain, issuer);
+    if (!validation.valid) {
+      throw new BadRequestException(
+        `Issuer ${issuer} is not verified for home domain ${cleanDomain}: ${validation.reason}`,
+      );
+    }
+    return {
+      code: String(currency.CODE),
+      issuer: String(currency.ISSUER),
+      display_decimals: currency.DISPLAY_DECIMALS == null ? undefined : Number(currency.DISPLAY_DECIMALS),
+      name: typeof currency.NAME === 'string' ? currency.NAME : undefined,
+      desc: typeof currency.DESC === 'string' ? currency.DESC : undefined,
+      conditions: typeof currency.CONDITIONS === 'string' ? currency.CONDITIONS : undefined,
+      image: typeof currency.IMAGE === 'string' ? currency.IMAGE : undefined,
+      anchor_asset_type: typeof currency.ANCHOR_ASSET_TYPE === 'string' ? currency.ANCHOR_ASSET_TYPE : undefined,
+      anchor_asset: typeof currency.ANCHOR_ASSET === 'string' ? currency.ANCHOR_ASSET : undefined,
+      redemption_instructions: typeof currency.REDEMPTION_INSTRUCTIONS === 'string' ? currency.REDEMPTION_INSTRUCTIONS : undefined,
+      collateral_addresses: typeof currency.COLLATERAL_ADDRESSES === 'string' ? currency.COLLATERAL_ADDRESSES : undefined,
+      regulated: typeof currency.REGULATED === 'boolean' ? currency.REGULATED : undefined,
+      approval_server: typeof currency.APPROVAL_SERVER === 'string' ? currency.APPROVAL_SERVER : undefined,
+      approval_criteria: typeof currency.APPROVAL_CRITERIA === 'string' ? currency.APPROVAL_CRITERIA : undefined,
     };
   }
 
@@ -793,7 +987,7 @@ export class FederationService {
         `account (Stellar public key G…) is required for SEP-${params.sep} request links`,
       );
     }
-    if (params.account && !PUBLIC_KEY_RE.test(params.account)) {
+    if (params.account && !isStellarPublicKey(params.account)) {
       throw new BadRequestException('account must be a Stellar public key (G…)');
     }
 
@@ -880,6 +1074,226 @@ export class FederationService {
     };
   }
 
+  // ─── GET /federation/diagnostics (Savitura/Savitools#341) ───────────────
+
+  /**
+   * End-to-end federation server diagnostic: discover the server from
+   * stellar.toml, run both lookup directions, and classify every failure by
+   * stage (dns, toml, tls, http, timeout, schema, ssrf, redirects).
+   * The report is redacted: request URLs keep only their origin + path.
+   */
+  async getServerDiagnostics(domain: string): Promise<FederationDiagnosticsReport> {
+    const cleanDomain = normalizeDomain(domain);
+    if (!isDomain(cleanDomain)) {
+      throw new BadRequestException(`Invalid domain: ${domain}`);
+    }
+
+    const startedAt = Date.now();
+    const stages: DiagnosticStage[] = [];
+
+    // ─── Stage 1: stellar.toml discovery ─────────────────────────────────
+    const tomlStage: DiagnosticStage = {
+      stage: 'toml',
+      ok: false,
+      details: {},
+    };
+    stages.push(tomlStage);
+
+    let tomlData: Record<string, unknown>;
+    try {
+      const tomlRecord = await this.fetchTomlRecord(cleanDomain);
+      tomlData = tomlRecord.parsed;
+      tomlStage.ok = true;
+      tomlStage.latencyMs = tomlRecord.fetchLatencyMs;
+      tomlStage.details.tomlUrl = `https://${cleanDomain}/.well-known/stellar.toml`;
+    } catch (error) {
+      tomlStage.error = classifyError(error);
+      tomlStage.details.message =
+        error instanceof Error ? error.message : 'stellar.toml could not be fetched';
+      return redactReport({
+        domain: cleanDomain,
+        checkedAt: new Date().toISOString(),
+        totalLatencyMs: Date.now() - startedAt,
+        stages,
+        ok: false,
+        failures: [tomlStage.error ?? 'http'],
+      });
+    }
+
+    const federationServer =
+      typeof tomlData.FEDERATION_SERVER === 'string' ? tomlData.FEDERATION_SERVER : null;
+    if (!federationServer) {
+      tomlStage.ok = false;
+      tomlStage.error = 'schema';
+      tomlStage.details.message = 'stellar.toml does not declare a FEDERATION_SERVER';
+      return redactReport({
+        domain: cleanDomain,
+        checkedAt: new Date().toISOString(),
+        totalLatencyMs: Date.now() - startedAt,
+        stages,
+        ok: false,
+        failures: ['schema'],
+      });
+    }
+    tomlStage.details.federationServer = federationServer;
+
+    // ─── Stage 2: server reachability + redirect chain ──────────────────
+    const reachStage: DiagnosticStage = {
+      stage: 'http',
+      ok: false,
+      latencyMs: 0,
+      details: { serverUrl: federationServer },
+      redirectChain: [],
+    };
+    stages.push(reachStage);
+
+    let serverStatus: number | null = null;
+    const reachRedirects: string[] = [];
+    try {
+      const res = await this.fetchWithTimeout(
+        appendQuery(federationServer, { q: probeQuery(cleanDomain), type: 'name' }),
+        this.probeTimeoutMs,
+        undefined,
+        reachRedirects,
+      );
+      serverStatus = res.status;
+      reachStage.ok = res.ok;
+      reachStage.latencyMs = Date.now() - startedAt - (tomlStage.latencyMs ?? 0);
+      reachStage.details.statusCode = res.status;
+      reachStage.redirectChain = reachRedirects.length > 0 ? reachRedirects : undefined;
+      if (!res.ok) {
+        reachStage.error = 'http';
+        reachStage.details.message = `Federation server responded with HTTP ${res.status}`;
+      }
+    } catch (error) {
+      reachStage.error = classifyError(error);
+      reachStage.redirectChain = reachRedirects.length > 0 ? reachRedirects : undefined;
+      reachStage.details.message =
+        error instanceof Error ? error.message : 'Federation server request failed';
+      return redactReport({
+        domain: cleanDomain,
+        checkedAt: new Date().toISOString(),
+        totalLatencyMs: Date.now() - startedAt,
+        stages,
+        ok: false,
+        failures: [reachStage.error ?? 'http'],
+      });
+    }
+
+    // ─── Stage 3: forward lookup (name → account) ────────────────────────
+    const testAddress = `savitools-probe*${cleanDomain}`;
+    const forwardStage: DiagnosticStage = {
+      stage: 'forward-lookup',
+      ok: false,
+      latencyMs: 0,
+      details: { requestUrl: redactUrl(appendQuery(federationServer, { q: testAddress, type: 'name' })) },
+    };
+    stages.push(forwardStage);
+
+    let forwardStatus: number | null = null;
+    try {
+      const res = await this.fetchWithTimeout(
+        appendQuery(federationServer, { q: testAddress, type: 'name' }),
+        this.requestTimeoutMs,
+      );
+      forwardStatus = res.status;
+      forwardStage.latencyMs = Date.now() - startedAt;
+      forwardStage.details.statusCode = res.status;
+      if (res.ok) {
+        // The synthetic user should not resolve; drain the body defensively
+        // because the mock/server response shape is unknown here.
+        forwardStage.ok = true;
+        forwardStage.details.message =
+          'Unexpected 2xx for the synthetic probe user (should be 404); treating as non-blocking';
+      } else {
+        // A 404 for an unknown user is compliant behaviour for SEP-2.
+        if (res.status === 404) {
+          forwardStage.ok = true;
+          forwardStage.details.message = 'Unknown user returned 404 (SEP-2 compliant)';
+        } else {
+          forwardStage.error = 'http';
+          forwardStage.details.message = `Forward lookup returned HTTP ${res.status}`;
+        }
+      }
+    } catch (error) {
+      forwardStage.error = classifyError(error);
+      forwardStage.details.message =
+        error instanceof Error ? error.message : 'Forward lookup failed';
+    }
+
+    // ─── Stage 4: reverse lookup (account → name) ────────────────────────
+    // A synthetic forward probe never resolves to a real account, so the
+    // reverse direction is probed with an ACCOUNTS entry from stellar.toml.
+    const accountEntry = Array.isArray(tomlData.ACCOUNTS)
+      ? (tomlData.ACCOUNTS as Record<string, unknown>[]).find(
+          (a) => typeof a.PUBLIC_KEY === 'string' && isStellarPublicKey(String(a.PUBLIC_KEY)),
+        )
+      : undefined;
+    const reverseKey = accountEntry ? String(accountEntry.PUBLIC_KEY) : null;
+
+    const reverseStage: DiagnosticStage = {
+      stage: 'reverse-lookup',
+      ok: false,
+      latencyMs: 0,
+      details: {},
+    };
+    stages.push(reverseStage);
+
+    let reverseStatus: number | null = null;
+    if (!reverseKey) {
+      reverseStage.ok = true;
+      reverseStage.details.message =
+        'Skipped: no ACCOUNTS entry in stellar.toml to probe the reverse direction';
+    } else {
+      reverseStage.details.requestUrl = redactUrl(
+        appendQuery(federationServer, { q: reverseKey, type: 'id' }),
+      );
+      try {
+        const res = await this.fetchWithTimeout(
+          appendQuery(federationServer, { q: reverseKey, type: 'id' }),
+          this.requestTimeoutMs,
+        );
+        reverseStatus = res.status;
+        reverseStage.latencyMs = Date.now() - startedAt;
+        reverseStage.details.statusCode = res.status;
+        if (res.ok) {
+          const record = (await res.json()) as Record<string, unknown>;
+          if (typeof record.stellar_address === 'string') {
+            reverseStage.ok = true;
+            reverseStage.details.stellarAddress = record.stellar_address;
+          } else {
+            reverseStage.error = 'schema';
+            reverseStage.details.message = 'Response missing stellar_address field';
+          }
+        } else {
+          reverseStage.error = 'http';
+          reverseStage.details.message = `Reverse lookup returned HTTP ${res.status}`;
+        }
+      } catch (error) {
+        reverseStage.error = classifyError(error);
+        reverseStage.details.message =
+          error instanceof Error ? error.message : 'Reverse lookup failed';
+      }
+    }
+
+    const failures = stages
+      .filter((s) => !s.ok && s.error)
+      .map((s) => s.error) as DiagnosticFailureKind[];
+
+    return redactReport({
+      domain: cleanDomain,
+      checkedAt: new Date().toISOString(),
+      totalLatencyMs: Date.now() - startedAt,
+      stages,
+      ok: failures.length === 0,
+      failures: [...new Set(failures)],
+      serverUrl: federationServer,
+      serverStatus,
+      forwardStatus,
+      reverseStatus,
+    });
+  }
+
   // ─── Helpers ────────────────────────────────────────────────────────────
 
   private async fetchToml(
@@ -890,14 +1304,9 @@ export class FederationService {
 
   private async fetchTomlRecord(domain: string): Promise<CachedToml> {
     const key = normalizeDomain(domain);
+    // A read refreshes recency, and an expired document is never served.
     const cached = this.tomlCache.get(key);
-    if (cached && cached.expiresAt > Date.now()) {
-      // Refresh insertion order so eviction remains least-recently-used.
-      this.tomlCache.delete(key);
-      this.tomlCache.set(key, cached);
-      return cached;
-    }
-    if (cached) this.tomlCache.delete(key);
+    if (cached) return cached;
 
     const inFlight = this.tomlInFlight.get(key);
     if (inFlight) return inFlight;
@@ -924,14 +1333,8 @@ export class FederationService {
     const cached: CachedToml = {
       parsed: parseBoundedToml(raw),
       fetchLatencyMs: Date.now() - start,
-      expiresAt: Date.now() + this.tomlCacheTtlMs,
     };
     this.tomlCache.set(domain, cached);
-    while (this.tomlCache.size > this.tomlCacheMaxEntries) {
-      const oldest = this.tomlCache.keys().next().value as string | undefined;
-      if (!oldest) break;
-      this.tomlCache.delete(oldest);
-    }
     return cached;
   }
 

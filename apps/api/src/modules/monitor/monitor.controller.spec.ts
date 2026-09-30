@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
-import { HttpStatus } from '@nestjs/common';
+import { ServiceUnavailableException } from '@nestjs/common';
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
 import { MonitorController } from './monitor.controller';
@@ -15,7 +15,6 @@ import type { FastifyReply } from 'fastify';
 
 describe('MonitorController SSE and Metrics', () => {
   let controller: MonitorController;
-  let configService: ConfigService;
 
   const mockMonitorService = {
     createWatch: jest.fn(),
@@ -67,8 +66,8 @@ describe('MonitorController SSE and Metrics', () => {
       .useValue({ canActivate: () => true })
       .compile();
 
+    testingModule = module;
     controller = module.get<MonitorController>(MonitorController);
-    configService = module.get<ConfigService>(ConfigService);
   });
 
   it('exposes metrics via /metrics endpoint', () => {
@@ -108,25 +107,23 @@ describe('MonitorController SSE and Metrics', () => {
 
     expect(controller.getMetrics().activeSseConnections).toBe(2);
 
-    await controller.stream(reply3);
-
-    expect(reply3.status).toHaveBeenCalledWith(HttpStatus.SERVICE_UNAVAILABLE);
-    expect(reply3.send).toHaveBeenCalledWith(
-      expect.objectContaining({
-        statusCode: HttpStatus.SERVICE_UNAVAILABLE,
-        message: 'Maximum SSE connections reached',
-      }),
+    // The controller throws instead of writing the response itself; the global
+    // ApiExceptionFilter turns this into the single shared error envelope.
+    await expect(controller.stream(reply3)).rejects.toThrow(
+      ServiceUnavailableException,
     );
+    expect(reply3.status).not.toHaveBeenCalled();
+    expect(reply3.send).not.toHaveBeenCalled();
   });
 
   it('cleans up connections on client disconnect', async () => {
-    const rawListeners: Record<string, Function> = {};
+    const rawListeners: Record<string, (...args: unknown[]) => unknown> = {};
     const reply = {
       raw: {
         setHeader: jest.fn(),
         flushHeaders: jest.fn(),
         write: jest.fn(),
-        on: jest.fn((event: string, fn: Function) => {
+        on: jest.fn((event: string, fn: (...args: unknown[]) => unknown) => {
           rawListeners[event] = fn;
         }),
         writableEnded: false,
@@ -143,6 +140,119 @@ describe('MonitorController SSE and Metrics', () => {
     rawListeners['close']?.();
 
     expect(controller.getMetrics().activeSseConnections).toBe(0);
+  });
+
+  it.each(['getMetrics', 'stream'] as const)(
+    'requires a JWT for %s, like the rest of the controller (#295)',
+    (handler) => {
+      const guards = Reflect.getMetadata(
+        GUARDS_METADATA,
+        MonitorController.prototype[handler],
+      ) as unknown[] | undefined;
+
+      expect(guards).toContain(JwtAuthGuard);
+    },
+  );
+
+  describe('idle reaper (#295)', () => {
+    function createLiveReply() {
+      const peerListeners: Record<string, (...args: unknown[]) => void> = {};
+      const reply = {
+        raw: {
+          setHeader: jest.fn(),
+          flushHeaders: jest.fn(),
+          write: jest.fn(),
+          on: jest.fn(),
+          writableEnded: false,
+          end: jest.fn(),
+          socket: { destroyed: false, writable: true },
+        },
+        request: {
+          raw: {
+            on: jest.fn(
+              (event: string, fn: (...args: unknown[]) => void) => {
+                peerListeners[event] = fn;
+              },
+            ),
+          },
+        },
+        status: jest.fn().mockReturnThis(),
+        send: jest.fn(),
+      } as unknown as FastifyReply;
+
+      return {
+        reply,
+        emitPeerData: () => peerListeners['data']?.(),
+      };
+    }
+
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    /**
+     * The reaper interval is armed in the constructor, so a controller whose
+     * sweep has to be observable under fake timers is built after they are
+     * installed.
+     */
+    function createReapingController(): MonitorController {
+      return new MonitorController(
+        testingModule.get(MonitorService),
+        testingModule.get(MonitorRuntimeConfig),
+        testingModule.get(MonitorLeaderService),
+        testingModule.get(StreamManager),
+      );
+    }
+
+    it('reaps a silent connection even though our heartbeats keep flowing', async () => {
+      const reaping = createReapingController();
+      const { reply } = createLiveReply();
+      await reaping.stream(reply);
+
+      expect(reaping.getMetrics().activeSseConnections).toBe(1);
+
+      // One heartbeat lands at 30s, still inside the 60s idle window.
+      jest.advanceTimersByTime(30_000);
+      expect(reply.raw.write).toHaveBeenCalledWith(': ping\n\n');
+      expect(reaping.getMetrics().activeSseConnections).toBe(1);
+
+      // Past the 60s idle window (the next sweep lands at 75s): the heartbeats
+      // must not have extended the idle clock, so the connection is gone.
+      jest.advanceTimersByTime(46_000);
+      expect(reaping.getMetrics().activeSseConnections).toBe(0);
+      expect(reply.raw.end).toHaveBeenCalled();
+    });
+
+    it('keeps a connection whose peer keeps sending inside the window', async () => {
+      const reaping = createReapingController();
+      const { reply, emitPeerData } = createLiveReply();
+      await reaping.stream(reply);
+
+      for (let i = 0; i < 5; i += 1) {
+        jest.advanceTimersByTime(30_000);
+        emitPeerData();
+      }
+
+      expect(reaping.getMetrics().activeSseConnections).toBe(1);
+      expect(reply.raw.end).not.toHaveBeenCalled();
+    });
+
+    it('reclaims a connection whose socket the peer already dropped', async () => {
+      const reaping = createReapingController();
+      const { reply } = createLiveReply();
+      await reaping.stream(reply);
+
+      (reply.raw as { socket: { destroyed: boolean } }).socket.destroyed = true;
+
+      // The first sweep, long before the idle window elapses.
+      jest.advanceTimersByTime(15_000);
+
+      expect(reaping.getMetrics().activeSseConnections).toBe(0);
+    });
   });
 });
 

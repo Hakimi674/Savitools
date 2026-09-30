@@ -30,6 +30,7 @@ export class TransactionModificationsDto {
   @ApiPropertyOptional({ description: 'New operations array (raw or structured)' })
   @IsOptional()
   @IsArray()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- operations arrive as arbitrary JSON
   operations?: any[];
 }
 

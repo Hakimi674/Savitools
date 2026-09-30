@@ -164,15 +164,6 @@ describe('AuthService', () => {
       emailVerified: true,
       passwordHash,
     });
-    const clientDataJSON = (challenge: string) =>
-      Buffer.from(
-        JSON.stringify({
-          type: 'webauthn.create',
-          challenge,
-          origin: 'http://localhost:3000',
-        }),
-      ).toString('base64url');
-
     it('requires a valid reauthentication grant to register', async () => {
       usersRepo.findOne.mockResolvedValue(user());
       const grant = await service.requestPasskeyReauth(user().id, 'password123');
@@ -206,16 +197,17 @@ describe('AuthService', () => {
       expect(options.rp.name).toBe('SaviTools');
       expect(options.challenge).toBeDefined();
 
-      // The challenge is stored for this user only.
+      // The challenge is stored for this user only. The store is a
+      // BoundedTtlMap, so the expiry lives on the map (#291).
       const stored = (service as any).passkeyChallenges;
-      const entry = [...stored.values()].find(
-        (e: any) => e.challenge === options.challenge,
-      );
+      const entry = stored
+        .keys()
+        .map((key: string) => stored.get(key))
+        .find((e: any) => e?.challenge === options.challenge);
       expect(entry.rpId).toBe('localhost');
       expect(entry.type).toBe('registration');
-      expect(entry.expiresAt).toBeLessThanOrEqual(
-        Date.now() + 120_000,
-      );
+      expect(stored.ttl).toBe(120_000);
+      expect(stored.capacity).toBe(10_000);
     });
 
     it('revoked credentials cannot authenticate', async () => {
@@ -771,7 +763,6 @@ describe('AuthService', () => {
 
   describe('refresh', () => {
     it('rotates tokens and atomically consumes the old one', async () => {
-      const { createHash } = require('crypto');
       const rawToken = 'raw-refresh-token';
       const tokenHash = createHash('sha256').update(rawToken).digest('hex');
 
@@ -798,7 +789,6 @@ describe('AuthService', () => {
     });
 
     it('throws INVALID_REFRESH_TOKEN for expired token', async () => {
-      const { createHash } = require('crypto');
       const rawToken = 'expired-token';
       const tokenHash = createHash('sha256').update(rawToken).digest('hex');
 
@@ -821,7 +811,6 @@ describe('AuthService', () => {
 
     describe('with a real token store', () => {
       function setup(rawToken: string, familyId = 'fam-1') {
-        const { createHash } = require('crypto');
         const tokenHash = createHash('sha256').update(rawToken).digest('hex');
         const table = fakeRefreshTokenTable([
           {

@@ -164,7 +164,7 @@ describe('Monitor Multi-Instance Integration', () => {
   }
 
   it('produces exactly one alert event and one notification for a single threshold crossing across two replicas', async () => {
-    let now = 1_000_000;
+    const now = 1_000_000;
     const sharedStore = createInMemoryMonitorLockStore(() => now);
     const sharedAlerts: AlertEvent[] = [];
     const sharedJobs: string[] = [];
@@ -218,7 +218,7 @@ describe('Monitor Multi-Instance Integration', () => {
   });
 
   it('fails over cleanly when the leader replica crashes and standby takes over', async () => {
-    let now = 1_000_000;
+    const now = 1_000_000;
     const sharedStore = createInMemoryMonitorLockStore(() => now);
     const sharedAlerts: AlertEvent[] = [];
     const sharedJobs: string[] = [];

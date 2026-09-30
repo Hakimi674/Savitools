@@ -99,4 +99,18 @@ export const tools = [
       "Live Stellar network health: ledger close time, fee tracker, Horizon latency.",
     status: "MVP" as const,
   },
+  {
+    href: "/rpc",
+    label: "Soroban RPC",
+    description:
+      "Call read-only Soroban RPC methods with schema-aware inputs and inspect the raw JSON-RPC response.",
+    status: "MVP" as const,
+  },
+  {
+    href: "/qr-handoff",
+    label: "QR Handoff",
+    description:
+      "Move an unsigned or partially signed transaction across an air gap with checksummed animated QR frames.",
+    status: "MVP" as const,
+  },
 ] as const;

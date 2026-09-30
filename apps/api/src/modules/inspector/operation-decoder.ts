@@ -1,4 +1,3 @@
-import type { Operation } from '@stellar/stellar-sdk';
 import { StrKey } from '@stellar/stellar-sdk';
 import { decodeScVal } from '../contracts/scval-decoder';
 

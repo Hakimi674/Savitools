@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsArray, IsObject, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsObject, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class CreateWorkspaceDTO {
   @ApiProperty({ example: 'My payment flow', description: 'Workspace display name' })

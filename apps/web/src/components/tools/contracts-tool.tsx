@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback } from 'react';
 import { Upload, FileCode, Terminal, ExternalLink, Clock, Trash2, BookOpen, Link as LinkIcon } from 'lucide-react';
+import { compareAbis, type AbiChange } from '@/lib/abi-diff';
 import {
   attachContractAbi,
   deployContract,
@@ -223,6 +224,86 @@ function AbiCatalogPanel({ contractId }: { contractId: string }) {
         </div>
       )}
     </div>
+  );
+}
+
+function AbiDiffPanel() {
+  const [before, setBefore] = useState('');
+  const [after, setAfter] = useState('');
+  const [changes, setChanges] = useState<AbiChange[] | null>(null);
+  const [error, setError] = useState('');
+
+  const compare = () => {
+    setError('');
+    try {
+      setChanges(compareAbis(JSON.parse(before), JSON.parse(after)));
+    } catch (err: unknown) {
+      setChanges(null);
+      setError(err instanceof Error ? err.message : 'Could not compare these ABIs.');
+    }
+  };
+
+  return (
+    <section className="rounded-lg border border-border p-6 space-y-4">
+      <div>
+        <h2 className="text-sm font-medium">Compare contract ABIs</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Compare two Soroban interface JSON documents. Removed or changed signatures are breaking; new entries are additive.
+        </p>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <label className="space-y-1.5 text-xs text-muted-foreground">
+          Previous ABI
+          <textarea
+            value={before}
+            onChange={(event) => setBefore(event.target.value)}
+            rows={8}
+            placeholder='{"methods":[...],"events":[...]}'
+            className="block w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs text-foreground"
+            spellCheck={false}
+          />
+        </label>
+        <label className="space-y-1.5 text-xs text-muted-foreground">
+          New ABI
+          <textarea
+            value={after}
+            onChange={(event) => setAfter(event.target.value)}
+            rows={8}
+            placeholder='{"methods":[...],"events":[...]}'
+            className="block w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs text-foreground"
+            spellCheck={false}
+          />
+        </label>
+      </div>
+      <button
+        type="button"
+        onClick={compare}
+        disabled={!before.trim() || !after.trim()}
+        className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-50"
+      >
+        Compare ABIs
+      </button>
+      {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+      {changes && (
+        <div aria-live="polite" className="space-y-2">
+          {changes.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No ABI changes detected.</p>
+          ) : changes.map((change, index) => (
+            <div
+              key={`${change.kind}-${change.name}-${index}`}
+              className={`flex items-start gap-2 rounded border px-3 py-2 text-xs ${
+                change.classification === 'breaking'
+                  ? 'border-destructive/30 bg-destructive/5 text-destructive'
+                  : 'border-green-500/30 bg-green-500/5 text-green-700 dark:text-green-400'
+              }`}
+            >
+              <span className="font-semibold uppercase">{change.classification}</span>
+              <span className="font-mono">{change.detail}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -545,6 +626,8 @@ export function ContractsTool() {
 
       {/* ABI Catalog Panel */}
       {selectedContract && <AbiCatalogPanel contractId={selectedContract} />}
+
+      <AbiDiffPanel />
 
       {/* Contract History */}
       <div className="rounded-lg border border-border p-6 space-y-4">

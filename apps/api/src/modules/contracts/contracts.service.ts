@@ -16,6 +16,7 @@ import * as os from 'os';
 import { execFile } from 'child_process';
 import { Queue, QueueEvents, Worker } from 'bullmq';
 import { assertPublicHostname } from '../../common/ssrf-guard';
+import { ConfigurationError } from '../../common/errors/configuration.error';
 import { AbiCatalogEntry, buildAbiCatalog, encodeAbiArgument } from './abi-catalog';
 import { AttachAbiDto, ABI_MAX_BYTES } from './dto/attach-abi.dto';
 import {
@@ -104,9 +105,9 @@ export class ContractsService {
       network.toLowerCase() === "public";
 
     if (isProduction && rpcUrl.startsWith("http://")) {
-      throw new Error(
+      throw new ConfigurationError(
         "Plaintext RPC (http) is not allowed for production signing",
-      );
+      });
     }
 
     this.isProduction = isProduction;
@@ -323,17 +324,18 @@ export class ContractsService {
 
   private async execGitCommand(args: string[], cwd: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
-      execFile('git', args, { cwd, timeout: this.gitCloneTimeoutMs, stdio: 'ignore' }, (error) => {
+      const options = { cwd, timeout: this.gitCloneTimeoutMs, stdio: 'ignore' };
+      execFile('git', args, options, (error) => {
         if (error) {
           if (error.message.includes('ENOENT')) {
             reject(new BadRequestException('Git is not installed in this environment; Git-based WASM import is unavailable'));
             return;
           }
-          reject(error);
+          reject(new BadRequestException(`Git command failed: ${error.message}`));
           return;
         }
         resolve();
-      });
+      );
     });
   }
 
@@ -351,12 +353,12 @@ export class ContractsService {
 
       const fullArtifactPath = this.resolveArtifactInsideCheckout(tempDir, normalizedArtifactPath);
       return fs.readFileSync(fullArtifactPath);
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (err instanceof NotFoundException || err instanceof BadRequestException) throw err;
-      if (err?.code === 'ENOENT') {
+      if ((err as { code?: string })?.code === 'ENOENT') {
         throw new BadRequestException('Git is not installed in this environment; Git-based WASM import is unavailable');
       }
-      throw new BadRequestException(`Failed to fetch WASM from Git repository: ${err.message}`);
+      throw new BadRequestException(`Failed to fetch WASM from Git repository: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       try {
         fs.rmSync(tempDir, { recursive: true, force: true });
@@ -472,14 +474,18 @@ export class ContractsService {
       this.pruneUrlCache();
 
       return { buffer: wasmBuffer, metadata };
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (err instanceof BadRequestException) {
         throw err;
       }
-      if (err.name === 'AbortError' || err.code === 'ABORT_ERR') {
+      const errName = err instanceof Error ? err.name : '';
+      const errCode = (err as { code?: string } | null)?.code;
+      if (errName === 'AbortError' || errCode === 'ABORT_ERR') {
         throw new BadRequestException('WASM download timed out');
       }
-      throw new BadRequestException(`Failed to fetch WASM from URL: ${err.message}`);
+      throw new BadRequestException(
+        `Failed to fetch WASM from URL: ${err instanceof Error ? err.message : String(err)}`,
+      );
     } finally {
       clearTimeout(timeout);
     }
@@ -682,7 +688,7 @@ export class ContractsService {
     salt: Buffer,
     constructorArgs: xdr.ScVal[],
   ): Promise<string> {
-    const account = await this.timeRpc("get_account", () =>
+    await this.timeRpc("get_account", () =>
       this.rpcServer.getAccount(this.deployer.publicKey()),
     );
     const address = new Address(this.deployer.publicKey());

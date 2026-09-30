@@ -80,6 +80,7 @@ export class PreconditionsDto {
   maxLedgerAhead?: number;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- operation fields are arbitrary JSON keyed by field name
 export type OperationDto = Record<string, any> & { type: string };
 
 export interface PriceRatioDto {
@@ -152,5 +153,6 @@ export class BuildTransactionDto {
 
   @ApiProperty({ description: 'Ordered array of operations (flattened fields)', isArray: true })
   @IsArray()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- operation fields are arbitrary JSON keyed by field name
   operations: any[];
 }

@@ -1050,7 +1050,7 @@ export interface WebhookHistoryEntry {
   statusCode?: number | null;
   responseStatus?: number | null;
   responseHeaders: Record<string, string>;
-  responseBody: any;
+  responseBody: string;
   latencyMs: number;
   timestamp: number;
   error?: string;
@@ -1133,6 +1133,7 @@ export interface SandboxAccountDetails {
     authRevocable: boolean;
     authImmutable: boolean;
   };
+  network?: string;
 }
 
 export interface SandboxFundResult {
@@ -1141,12 +1142,22 @@ export interface SandboxFundResult {
   txHash: string | null;
   confirmationStatus: string;
   startingBalance: string;
+  network?: string;
+}
+
+export interface SandboxResetResult {
+  publicKey: string;
+  reset: boolean;
+  network: string;
+  startingBalance: string;
+  txHash: string | null;
+  message: string;
 }
 
 export interface SandboxPaymentResult {
   success: boolean;
   txHash: string;
-  feeCharged: number;
+  feeCharged: string; // Fixed: was number, server returns string
   resultCode: string;
   destination: string;
   /** Underlying G… account a muxed destination pays into. */
@@ -1155,18 +1166,33 @@ export interface SandboxPaymentResult {
   muxedId?: string | null;
   asset: string;
   amount: string;
+  network?: string;
 }
 
-export async function sandboxFund(publicKey: string) {
+export async function sandboxGenerateKeypair(network: string = 'testnet') {
+  return apiFetch<{ publicKey: string; secretKey: string; network: string }>(
+    `/sandbox/keypair?network=${encodeURIComponent(network)}`,
+    { method: "POST" },
+  );
+}
+
+export async function sandboxFund(publicKey: string, network: string = 'testnet') {
   return apiFetch<SandboxFundResult>("/sandbox/fund", {
     method: "POST",
-    body: JSON.stringify({ publicKey }),
+    body: JSON.stringify({ publicKey, network }),
   });
 }
 
-export async function sandboxGetAccount(publicKey: string) {
+export async function sandboxResetAccount(publicKey: string, network: string = 'testnet') {
+  return apiFetch<SandboxResetResult>("/sandbox/reset", {
+    method: "POST",
+    body: JSON.stringify({ publicKey, network }),
+  });
+}
+
+export async function sandboxGetAccount(publicKey: string, network: string = 'testnet') {
   return apiFetch<SandboxAccountDetails>(
-    `/sandbox/account/${encodeURIComponent(publicKey)}`,
+    `/sandbox/account/${encodeURIComponent(publicKey)}?network=${encodeURIComponent(network)}`,
   );
 }
 
@@ -1176,10 +1202,11 @@ export async function sandboxSendPayment(
   asset: string,
   amount: string,
   memo?: string,
+  network: string = 'testnet',
 ) {
   return apiFetch<SandboxPaymentResult>("/sandbox/payment", {
     method: "POST",
-    body: JSON.stringify({ fromSecret, toPublicKey, asset, amount, memo }),
+    body: JSON.stringify({ fromSecret, toPublicKey, asset, amount, memo, network }),
   });
 }
 
@@ -1470,16 +1497,25 @@ export interface TomlResult {
   validationWarnings: string[];
 }
 
+export interface HomeDomainValidationResult {
+  valid: boolean;
+  domain: string;
+  issuer: string;
+  reason: 'issuer_not_declared' | 'home_domain_mismatch' | null;
+}
+
 export interface SepInfo {
   number: number;
   name: string;
   supported: boolean;
   endpoint: string | null;
-  probeStatus: "green" | "yellow" | "red" | "none";
+  probeStatus: "green" | "yellow" | "red" | "none" | "timeout"; // Fixed: added 'timeout' member
 }
 
 export interface SepResult {
   seps: SepInfo[];
+  /** Additive TOML state, so an unavailable or malformed document is not hidden. */
+  tomlStatus?: "available" | "unavailable" | "malformed";
 }
 
 export async function resolveFederation(address: string) {
@@ -1492,6 +1528,18 @@ export async function fetchStellarToml(domain: string) {
   return apiFetch<TomlResult>(
     `/federation/toml?domain=${encodeURIComponent(domain)}`,
   );
+}
+
+export async function validateHomeDomain(domain: string, issuer: string) {
+  const params = new URLSearchParams({ domain, issuer });
+  return apiFetch<HomeDomainValidationResult>(
+    `/federation/validate-home-domain?${params.toString()}`,
+  );
+}
+
+export async function fetchAssetMetadata(domain: string, code: string, issuer: string) {
+  const params = new URLSearchParams({ domain, code, issuer });
+  return apiFetch<TomlCurrency>(`/federation/asset-metadata?${params.toString()}`);
 }
 
 export async function fetchSepSupport(domain: string) {
@@ -1529,6 +1577,50 @@ export async function previewTransferLink(input: {
   if (input.account) params.set("account", input.account);
   return apiFetch<TransferLinkResult>(
     `/federation/link-preview?${params.toString()}`,
+  );
+}
+
+/* ─── Federation server diagnostics (Savitura/Savitools#341) ────────────── */
+
+export type DiagnosticStageName =
+  | "toml"
+  | "http"
+  | "forward-lookup"
+  | "reverse-lookup";
+
+export type DiagnosticFailureKind =
+  | "dns"
+  | "toml"
+  | "tls"
+  | "http"
+  | "timeout"
+  | "schema"
+  | "ssrf";
+
+export interface DiagnosticStage {
+  stage: DiagnosticStageName;
+  ok: boolean;
+  latencyMs?: number;
+  error?: DiagnosticFailureKind;
+  details: Record<string, unknown>;
+  redirectChain?: string[];
+}
+
+export interface FederationDiagnosticsReport {
+  domain: string;
+  checkedAt: string;
+  ok: boolean;
+  totalLatencyMs: number;
+  serverUrl?: string;
+  serverStatus?: number | null;
+  forwardStatus?: number | null;
+  stages: DiagnosticStage[];
+  failures: DiagnosticFailureKind[];
+}
+
+export async function fetchFederationDiagnostics(domain: string) {
+  return apiFetch<FederationDiagnosticsReport>(
+    `/federation/diagnostics?domain=${encodeURIComponent(domain)}`,
   );
 }
 
@@ -1845,4 +1937,80 @@ export function assetControlComposerLink(input: {
   params.set("assetIssuer", input.issuer);
 
   return `/composer?${params.toString()}`;
+}
+
+// ─── Soroban RPC console (Savitura/Savitools#358) ────────────────────────
+
+export type SorobanRpcNetwork = "testnet" | "mainnet";
+
+export type SorobanRpcParamType =
+  | "string"
+  | "number"
+  | "integer"
+  | "boolean"
+  | "array"
+  | "object";
+
+/** One named parameter of a whitelisted method, as served by the API. */
+export interface SorobanRpcParamSpec {
+  name: string;
+  type: SorobanRpcParamType;
+  required: boolean;
+  description: string;
+  example?: unknown;
+  itemType?: "string" | "integer";
+  /** RegExp source the value must match (hashes, envelopes…). */
+  pattern?: string;
+  patternHint?: string;
+  /** Closed set of accepted values — rendered as a select. */
+  enum?: string[];
+  min?: number;
+  max?: number;
+  maxItems?: number;
+}
+
+export interface SorobanRpcMethodSpec {
+  name: string;
+  summary: string;
+  description: string;
+  params: SorobanRpcParamSpec[];
+}
+
+export interface SorobanRpcError {
+  code: number;
+  message: string;
+  data?: unknown;
+}
+
+export interface SorobanRpcExecuteResult {
+  method: string;
+  network: SorobanRpcNetwork;
+  tookMs: number;
+  result?: unknown;
+  error?: SorobanRpcError;
+}
+
+/** Read-only catalog + JSON schema for every method the console can call. */
+export async function listSorobanRpcMethods() {
+  return apiFetch<{ methods: SorobanRpcMethodSpec[] }>("/soroban-rpc/methods");
+}
+
+export async function getSorobanRpcMethod(method: string) {
+  return apiFetch<SorobanRpcMethodSpec>(`/soroban-rpc/methods/${method}`);
+}
+
+/**
+ * Invoke one whitelisted method. The API validates `params` against the
+ * method schema and only ever forwards the call to its configured endpoint;
+ * write methods such as `sendTransaction` are not exposed.
+ */
+export async function executeSorobanRpc(input: {
+  method: string;
+  params?: Record<string, unknown>;
+  network?: SorobanRpcNetwork;
+}) {
+  return apiFetch<SorobanRpcExecuteResult>("/soroban-rpc/execute", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }

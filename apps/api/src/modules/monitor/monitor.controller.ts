@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Delete,
   Body,
   Param,
@@ -12,10 +13,11 @@ import {
   UseGuards,
   BadRequestException,
   NotFoundException,
+  ServiceUnavailableException,
   Logger,
   OnModuleDestroy,
 } from '@nestjs/common';
-import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyReply } from 'fastify';
 import { MonitorService } from './monitor.service';
 import { CreateWatchDto } from './dto/create-watch.dto';
 import { PaginationQueryDto } from './dto/pagination-query.dto';
@@ -24,18 +26,27 @@ import { SearchEventsQueryDto } from './dto/search-events.dto';
 import { ExportEventsQueryDto } from './dto/export-events.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CurrentUser, AuthUser } from '../auth/decorators/current-user.decorator';
+import { toCsvRow } from '../../common/csv';
 import { MonitorLeaderService } from './monitor-leader.service';
 import { MonitorRuntimeConfig } from './monitor-runtime.config';
 import { StreamManager } from './stream-manager.service';
+import { MonitorDigestService, UpdateDigestPreferencesDto } from './monitor-digest.service';
 
 interface SseClient {
   reply: FastifyReply;
+  /**
+   * Idle clock: the last time the *peer* was heard from (bytes on the request)
+   * or the connection was opened. It is deliberately not touched by our own
+   * heartbeat — otherwise the reaper could never fire (Savitura/Savitools#295).
+   */
   lastActivity: number;
+  /** Last heartbeat we wrote. Diagnostics only; never extends the idle window. */
+  lastHeartbeatAt: number;
   timer?: NodeJS.Timeout;
   pingTimer?: NodeJS.Timeout;
 }
 
-/** Idle clients are dropped after this long without activity. */
+/** Idle clients are dropped after this long without peer activity. */
 const SSE_IDLE_TIMEOUT_MS = 60_000;
 const SSE_CLEANUP_INTERVAL_MS = 15_000;
 const SSE_PING_INTERVAL_MS = 30_000;
@@ -52,6 +63,7 @@ export class MonitorController implements OnModuleDestroy {
     private readonly runtime: MonitorRuntimeConfig,
     private readonly leader: MonitorLeaderService,
     private readonly streamManager: StreamManager,
+    private readonly digestService: MonitorDigestService,
   ) {
     this.cleanupInterval = setInterval(() => {
       this.disconnectIdleClients();
@@ -70,9 +82,35 @@ export class MonitorController implements OnModuleDestroy {
   private disconnectIdleClients(): void {
     const now = Date.now();
     for (const client of Array.from(this.clientConnections)) {
-      if (now - client.lastActivity > SSE_IDLE_TIMEOUT_MS) {
+      // A socket the peer already dropped is reclaimed on the next sweep,
+      // regardless of how recently we managed to write to it.
+      if (this.isClientSocketDead(client) || now - client.lastActivity > SSE_IDLE_TIMEOUT_MS) {
+        this.notifyIdleClient(client);
         this.terminateConnection(client, HttpStatus.REQUEST_TIMEOUT);
       }
+    }
+  }
+
+  private isClientSocketDead(client: SseClient): boolean {
+    const socket = client.reply.raw.socket;
+    if (client.reply.raw.writableEnded) return true;
+    if (!socket) return true;
+    return socket.destroyed || !socket.writable;
+  }
+
+  /**
+   * Tells a live-but-silent client why its stream is ending, so an SSE consumer
+   * knows to reconnect instead of waiting on a connection that is gone.
+   */
+  private notifyIdleClient(client: SseClient): void {
+    try {
+      if (!client.reply.raw.writableEnded) {
+        client.reply.raw.write(
+          'event: timeout\ndata: {"reason":"idle"}\n\n',
+        );
+      }
+    } catch {
+      // The peer is already gone; terminateConnection below is the cleanup.
     }
   }
 
@@ -96,12 +134,13 @@ export class MonitorController implements OnModuleDestroy {
   }
 
   /**
-   * Liveness for the load-test harness (scripts/ledger-monitor-load-test.ts)
-   * and for verifying that exactly one replica is producing: the Horizon stream
-   * counters and `isProducerLeader` tell an operator whether this instance owns
-   * the streams, without reading logs.
+   * Replica liveness and stream counters for operators: `isProducerLeader` and
+   * the Horizon counters tell an operator whether this instance owns the
+   * streams, without reading logs. JWT-guarded like the rest of the controller —
+   * it exposes the replica role, memory pressure and connection counts.
    */
   @Get('metrics')
+  @UseGuards(JwtAuthGuard)
   getMetrics() {
     const memory = process.memoryUsage();
     const round = (bytes: number) => Math.round((bytes / 1_048_576) * 100) / 100;
@@ -118,6 +157,7 @@ export class MonitorController implements OnModuleDestroy {
   }
 
   @Get('stream')
+  @UseGuards(JwtAuthGuard)
   async stream(
     @Res() reply: FastifyReply,
     @Query('network') network?: string,
@@ -126,23 +166,28 @@ export class MonitorController implements OnModuleDestroy {
     // silently differ from the configured value.
     const maxConns = this.runtime.maxSseConnections;
     if (this.activeSseConnections >= maxConns) {
-      reply.status(HttpStatus.SERVICE_UNAVAILABLE).send({
-        statusCode: HttpStatus.SERVICE_UNAVAILABLE,
-        message: 'Maximum SSE connections reached',
-        error: 'Service Unavailable',
-      });
-      return;
+      // Thrown rather than hand-built: the global ApiExceptionFilter owns the
+      // error envelope, so this response cannot drift from every other error.
+      throw new ServiceUnavailableException('Maximum SSE connections reached');
     }
 
     this.activeSseConnections++;
 
-    const clientInfo = {
+    const clientInfo: SseClient = {
       reply,
       lastActivity: Date.now(),
+      lastHeartbeatAt: 0,
       timer: undefined as NodeJS.Timeout | undefined,
       pingTimer: undefined as NodeJS.Timeout | undefined,
     };
     this.clientConnections.add(clientInfo);
+
+    // Only the peer keeps a connection alive. Our heartbeat below must not, or
+    // `disconnectIdleClients` could never fire (Savitura/Savitools#295).
+    const markPeerActivity = () => {
+      clientInfo.lastActivity = Date.now();
+    };
+    reply.request?.raw?.on?.('data', markPeerActivity);
 
     reply.raw.setHeader('Content-Type', 'text/event-stream');
     reply.raw.setHeader('Cache-Control', 'no-cache');
@@ -155,7 +200,9 @@ export class MonitorController implements OnModuleDestroy {
       try {
         if (!reply.raw.writableEnded) {
           reply.raw.write(': ping\n\n');
-          clientInfo.lastActivity = Date.now();
+          // Records the heartbeat for diagnostics only: a heartbeat is our own
+          // traffic, so it must not reset the peer-activity idle clock.
+          clientInfo.lastHeartbeatAt = Date.now();
         }
       } catch (err) {
         this.logger.error(`Failed to send heartbeat ping: ${err instanceof Error ? err.message : String(err)}`);
@@ -246,6 +293,27 @@ export class MonitorController implements OnModuleDestroy {
     return this.monitorService.getWebhook(user.id);
   }
 
+  @Get('preferences')
+  @UseGuards(JwtAuthGuard)
+  async getPreferences(@CurrentUser() user: AuthUser) {
+    return this.digestService.getPreferences(user.id);
+  }
+
+  @Put('preferences')
+  @UseGuards(JwtAuthGuard)
+  async updatePreferences(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: UpdateDigestPreferencesDto,
+  ) {
+    return this.digestService.updatePreferences(user.id, dto);
+  }
+
+  @Post('digest/flush')
+  @UseGuards(JwtAuthGuard)
+  async flushDigest(@CurrentUser() user: AuthUser) {
+    return this.digestService.flushDigestForUser(user.id);
+  }
+
   // ── Search & CSV export (Savitura/Savitools#195) ────────────
 
   /**
@@ -295,7 +363,7 @@ export class MonitorController implements OnModuleDestroy {
         query,
         (values) => {
           reply.raw.write(
-            `${values.map((value) => this.csvEscape(value)).join(',')}\r\n`,
+            `${toCsvRow(values)}\r\n`,
           );
         },
         () => {
@@ -308,16 +376,6 @@ export class MonitorController implements OnModuleDestroy {
       );
       if (!reply.raw.writableEnded) reply.raw.end();
     }
-  }
-
-  /** RFC 4180 quoting for a single CSV field. */
-  private csvEscape(value: string | number | null): string {
-    if (value === null || value === undefined) return '';
-    const str = String(value);
-    if (/[",\r\n]/.test(str)) {
-      return `"${str.replace(/"/g, '""')}"`;
-    }
-    return str;
   }
 
   /** Reject non-ISO date filters with 400 before they reach the service. */
