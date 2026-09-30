@@ -297,6 +297,15 @@ describe('ContractsService', () => {
             }
           }
           setTimeout(() => {
+            if (args[0] === 'sparse-checkout' && args[1] === 'set') {
+              writtenArtifacts.add(args[2] as string);
+            }
+            if (args[0] === 'checkout' && opts?.cwd) {
+              for (const artifact of writtenArtifacts) {
+                fs.mkdirSync(nodePath.join(opts.cwd, nodePath.dirname(artifact)), { recursive: true });
+                fs.writeFileSync(nodePath.join(opts.cwd, artifact), Buffer.from('wasm-bytes'));
+              }
+            }
             if (callback) callback(null, Buffer.alloc(0), Buffer.alloc(0));
           }, 50);
           return undefined;

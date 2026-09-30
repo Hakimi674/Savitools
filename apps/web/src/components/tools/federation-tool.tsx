@@ -930,6 +930,17 @@ export function FederationTool() {
           {tomlData && <TomlPanel data={tomlData} copied={copied} copy={copy} />}
           {sepData && <SepPanel data={sepData} />}
           {tomlData && (
+            <DiagnosticsPanel
+              domain={
+                tomlData.federationServer
+                  ? new URL(tomlData.federationServer).hostname
+                  : (input.trim().split('*')[1] ?? stripProtocol(input.trim()))
+              }
+              copied={copied}
+              copy={copy}
+            />
+          )}
+          {tomlData && (
             <LinkPreviewPanel
               domain={
                 tomlData.federationServer

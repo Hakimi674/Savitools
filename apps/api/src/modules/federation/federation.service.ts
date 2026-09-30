@@ -180,6 +180,107 @@ export interface TransferLinkResult {
 const DECIMAL_STRING_RE = /^\d+(\.\d+)?$/;
 const HTTPS_URL_RE = /^https:\/\/[^\s]+$/i;
 
+// ─── Server diagnostics (Savitura/Savitools#341) ────────────────────────────
+
+export type DiagnosticStageName =
+  | 'toml'
+  | 'http'
+  | 'forward-lookup'
+  | 'reverse-lookup';
+
+export type DiagnosticFailureKind =
+  | 'dns'
+  | 'toml'
+  | 'tls'
+  | 'http'
+  | 'timeout'
+  | 'schema'
+  | 'ssrf'
+  | 'redirects';
+
+/** One probed step of the diagnostic run. */
+export interface DiagnosticStage {
+  stage: DiagnosticStageName;
+  ok: boolean;
+  latencyMs?: number;
+  error?: DiagnosticFailureKind;
+  details: Record<string, unknown>;
+  redirectChain?: string[];
+}
+
+/** Redacted, copy-safe diagnostic report. */
+export interface FederationDiagnosticsReport {
+  domain: string;
+  checkedAt: string;
+  ok: boolean;
+  totalLatencyMs: number;
+  serverUrl?: string;
+  serverStatus?: number | null;
+  forwardStatus?: number | null;
+  reverseStatus?: number | null;
+  stages: DiagnosticStage[];
+  failures: DiagnosticFailureKind[];
+}
+
+/** Map any thrown error from the fetch path onto a failure kind. */
+function classifyError(error: unknown): DiagnosticFailureKind {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof RequestTimeoutError || /timed out/i.test(message)) return 'timeout';
+  if (/non-public address/i.test(message)) return 'ssrf';
+  if (/Could not resolve host/i.test(message)) return 'dns';
+  if (/Unsupported protocol/i.test(message)) return 'tls';
+  if (error instanceof BadGatewayException || /Too many redirects|redirect loop|redirect/i.test(message)) {
+    return 'redirects';
+  }
+  if (error instanceof NotFoundException) return 'toml';
+  // The bounded TOML parser reports malformed/oversized documents as 400s.
+  if (error instanceof BadRequestException && /Malformed TOML|TOML document|stellar\.toml/i.test(message)) {
+    return 'toml';
+  }
+  return 'http';
+}
+
+/** Append query parameters, preserving any existing path on the server URL. */
+function appendQuery(serverUrl: string, params: Record<string, string>): string {
+  const url = new URL(serverUrl);
+  for (const [key, value] of Object.entries(params)) {
+    url.searchParams.set(key, value);
+  }
+  return url.toString();
+}
+
+/** Strip query strings from a URL so reports stay copy-safe. */
+function redactUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return '(unparseable URL)';
+  }
+}
+
+/** Redact request URLs in-place before the report leaves the service. */
+function redactReport(report: FederationDiagnosticsReport): FederationDiagnosticsReport {
+  return {
+    ...report,
+    stages: report.stages.map((stage) => ({
+      ...stage,
+      details: Object.fromEntries(
+        Object.entries(stage.details).map(([key, value]) =>
+          typeof value === 'string' && /^https?:\/\//.test(value) && key !== 'serverUrl'
+            ? [key, redactUrl(value)]
+            : [key, value],
+        ),
+      ),
+    })),
+  };
+}
+
+/** Deterministic probe user for diagnostics — never a real account. */
+function probeQuery(domain: string): string {
+  return `savitools-diagnostic*${domain}`;
+}
+
 const REQUIRED_TOML_FIELDS = ['ACCOUNTS'] as const;
 
 /**
@@ -296,9 +397,11 @@ export class FederationService {
     urlStr: string,
     timeout = FETCH_TIMEOUT,
     parentSignal?: AbortSignal,
+    redirectChain: string[] = [],
   ): Promise<Response> {
     let target = new URL(urlStr);
-    
+    redirectChain.push(target.toString());
+
     if (target.protocol !== 'https:' && target.protocol !== 'http:') {
       throw new BadRequestException(`Unsupported protocol: ${target.protocol}`);
     }
@@ -340,6 +443,7 @@ export class FederationService {
           throw new BadGatewayException('Too many redirects');
         }
         target = new URL(response.headers.get('location')!, target);
+        redirectChain.push(target.toString());
         if (target.protocol !== 'https:' && target.protocol !== 'http:') {
           throw new BadRequestException(`Unsupported protocol in redirect: ${target.protocol}`);
         }
@@ -968,6 +1072,226 @@ export class FederationService {
       warning:
         'Preview only: SaviTools will not sign or submit this request. Open the link yourself after reviewing the anchor.',
     };
+  }
+
+  // ─── GET /federation/diagnostics (Savitura/Savitools#341) ───────────────
+
+  /**
+   * End-to-end federation server diagnostic: discover the server from
+   * stellar.toml, run both lookup directions, and classify every failure by
+   * stage (dns, toml, tls, http, timeout, schema, ssrf, redirects).
+   * The report is redacted: request URLs keep only their origin + path.
+   */
+  async getServerDiagnostics(domain: string): Promise<FederationDiagnosticsReport> {
+    const cleanDomain = normalizeDomain(domain);
+    if (!isDomain(cleanDomain)) {
+      throw new BadRequestException(`Invalid domain: ${domain}`);
+    }
+
+    const startedAt = Date.now();
+    const stages: DiagnosticStage[] = [];
+
+    // ─── Stage 1: stellar.toml discovery ─────────────────────────────────
+    const tomlStage: DiagnosticStage = {
+      stage: 'toml',
+      ok: false,
+      details: {},
+    };
+    stages.push(tomlStage);
+
+    let tomlData: Record<string, unknown>;
+    try {
+      const tomlRecord = await this.fetchTomlRecord(cleanDomain);
+      tomlData = tomlRecord.parsed;
+      tomlStage.ok = true;
+      tomlStage.latencyMs = tomlRecord.fetchLatencyMs;
+      tomlStage.details.tomlUrl = `https://${cleanDomain}/.well-known/stellar.toml`;
+    } catch (error) {
+      tomlStage.error = classifyError(error);
+      tomlStage.details.message =
+        error instanceof Error ? error.message : 'stellar.toml could not be fetched';
+      return redactReport({
+        domain: cleanDomain,
+        checkedAt: new Date().toISOString(),
+        totalLatencyMs: Date.now() - startedAt,
+        stages,
+        ok: false,
+        failures: [tomlStage.error ?? 'http'],
+      });
+    }
+
+    const federationServer =
+      typeof tomlData.FEDERATION_SERVER === 'string' ? tomlData.FEDERATION_SERVER : null;
+    if (!federationServer) {
+      tomlStage.ok = false;
+      tomlStage.error = 'schema';
+      tomlStage.details.message = 'stellar.toml does not declare a FEDERATION_SERVER';
+      return redactReport({
+        domain: cleanDomain,
+        checkedAt: new Date().toISOString(),
+        totalLatencyMs: Date.now() - startedAt,
+        stages,
+        ok: false,
+        failures: ['schema'],
+      });
+    }
+    tomlStage.details.federationServer = federationServer;
+
+    // ─── Stage 2: server reachability + redirect chain ──────────────────
+    const reachStage: DiagnosticStage = {
+      stage: 'http',
+      ok: false,
+      latencyMs: 0,
+      details: { serverUrl: federationServer },
+      redirectChain: [],
+    };
+    stages.push(reachStage);
+
+    let serverStatus: number | null = null;
+    const reachRedirects: string[] = [];
+    try {
+      const res = await this.fetchWithTimeout(
+        appendQuery(federationServer, { q: probeQuery(cleanDomain), type: 'name' }),
+        this.probeTimeoutMs,
+        undefined,
+        reachRedirects,
+      );
+      serverStatus = res.status;
+      reachStage.ok = res.ok;
+      reachStage.latencyMs = Date.now() - startedAt - (tomlStage.latencyMs ?? 0);
+      reachStage.details.statusCode = res.status;
+      reachStage.redirectChain = reachRedirects.length > 0 ? reachRedirects : undefined;
+      if (!res.ok) {
+        reachStage.error = 'http';
+        reachStage.details.message = `Federation server responded with HTTP ${res.status}`;
+      }
+    } catch (error) {
+      reachStage.error = classifyError(error);
+      reachStage.redirectChain = reachRedirects.length > 0 ? reachRedirects : undefined;
+      reachStage.details.message =
+        error instanceof Error ? error.message : 'Federation server request failed';
+      return redactReport({
+        domain: cleanDomain,
+        checkedAt: new Date().toISOString(),
+        totalLatencyMs: Date.now() - startedAt,
+        stages,
+        ok: false,
+        failures: [reachStage.error ?? 'http'],
+      });
+    }
+
+    // ─── Stage 3: forward lookup (name → account) ────────────────────────
+    const testAddress = `savitools-probe*${cleanDomain}`;
+    const forwardStage: DiagnosticStage = {
+      stage: 'forward-lookup',
+      ok: false,
+      latencyMs: 0,
+      details: { requestUrl: redactUrl(appendQuery(federationServer, { q: testAddress, type: 'name' })) },
+    };
+    stages.push(forwardStage);
+
+    let forwardStatus: number | null = null;
+    try {
+      const res = await this.fetchWithTimeout(
+        appendQuery(federationServer, { q: testAddress, type: 'name' }),
+        this.requestTimeoutMs,
+      );
+      forwardStatus = res.status;
+      forwardStage.latencyMs = Date.now() - startedAt;
+      forwardStage.details.statusCode = res.status;
+      if (res.ok) {
+        // The synthetic user should not resolve; drain the body defensively
+        // because the mock/server response shape is unknown here.
+        forwardStage.ok = true;
+        forwardStage.details.message =
+          'Unexpected 2xx for the synthetic probe user (should be 404); treating as non-blocking';
+      } else {
+        // A 404 for an unknown user is compliant behaviour for SEP-2.
+        if (res.status === 404) {
+          forwardStage.ok = true;
+          forwardStage.details.message = 'Unknown user returned 404 (SEP-2 compliant)';
+        } else {
+          forwardStage.error = 'http';
+          forwardStage.details.message = `Forward lookup returned HTTP ${res.status}`;
+        }
+      }
+    } catch (error) {
+      forwardStage.error = classifyError(error);
+      forwardStage.details.message =
+        error instanceof Error ? error.message : 'Forward lookup failed';
+    }
+
+    // ─── Stage 4: reverse lookup (account → name) ────────────────────────
+    // A synthetic forward probe never resolves to a real account, so the
+    // reverse direction is probed with an ACCOUNTS entry from stellar.toml.
+    const accountEntry = Array.isArray(tomlData.ACCOUNTS)
+      ? (tomlData.ACCOUNTS as Record<string, unknown>[]).find(
+          (a) => typeof a.PUBLIC_KEY === 'string' && isPublicKey(String(a.PUBLIC_KEY)),
+        )
+      : undefined;
+    const reverseKey = accountEntry ? String(accountEntry.PUBLIC_KEY) : null;
+
+    const reverseStage: DiagnosticStage = {
+      stage: 'reverse-lookup',
+      ok: false,
+      latencyMs: 0,
+      details: {},
+    };
+    stages.push(reverseStage);
+
+    let reverseStatus: number | null = null;
+    if (!reverseKey) {
+      reverseStage.ok = true;
+      reverseStage.details.message =
+        'Skipped: no ACCOUNTS entry in stellar.toml to probe the reverse direction';
+    } else {
+      reverseStage.details.requestUrl = redactUrl(
+        appendQuery(federationServer, { q: reverseKey, type: 'id' }),
+      );
+      try {
+        const res = await this.fetchWithTimeout(
+          appendQuery(federationServer, { q: reverseKey, type: 'id' }),
+          this.requestTimeoutMs,
+        );
+        reverseStatus = res.status;
+        reverseStage.latencyMs = Date.now() - startedAt;
+        reverseStage.details.statusCode = res.status;
+        if (res.ok) {
+          const record = (await res.json()) as Record<string, unknown>;
+          if (typeof record.stellar_address === 'string') {
+            reverseStage.ok = true;
+            reverseStage.details.stellarAddress = record.stellar_address;
+          } else {
+            reverseStage.error = 'schema';
+            reverseStage.details.message = 'Response missing stellar_address field';
+          }
+        } else {
+          reverseStage.error = 'http';
+          reverseStage.details.message = `Reverse lookup returned HTTP ${res.status}`;
+        }
+      } catch (error) {
+        reverseStage.error = classifyError(error);
+        reverseStage.details.message =
+          error instanceof Error ? error.message : 'Reverse lookup failed';
+      }
+    }
+
+    const failures = stages
+      .filter((s) => !s.ok && s.error)
+      .map((s) => s.error) as DiagnosticFailureKind[];
+
+    return redactReport({
+      domain: cleanDomain,
+      checkedAt: new Date().toISOString(),
+      totalLatencyMs: Date.now() - startedAt,
+      stages,
+      ok: failures.length === 0,
+      failures: [...new Set(failures)],
+      serverUrl: federationServer,
+      serverStatus,
+      forwardStatus,
+      reverseStatus,
+    });
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────────

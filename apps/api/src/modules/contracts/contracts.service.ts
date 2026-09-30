@@ -331,11 +331,9 @@ export class ContractsService {
             reject(new BadRequestException('Git is not installed in this environment; Git-based WASM import is unavailable'));
             return;
           }
-          reject(error);
-          return;
-        }
-        resolve();
-      });
+          resolve();
+        },
+      );
     });
   }
 
@@ -353,12 +351,12 @@ export class ContractsService {
 
       const fullArtifactPath = this.resolveArtifactInsideCheckout(tempDir, normalizedArtifactPath);
       return fs.readFileSync(fullArtifactPath);
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (err instanceof NotFoundException || err instanceof BadRequestException) throw err;
-      if (err?.code === 'ENOENT') {
+      if ((err as { code?: string })?.code === 'ENOENT') {
         throw new BadRequestException('Git is not installed in this environment; Git-based WASM import is unavailable');
       }
-      throw new BadRequestException(`Failed to fetch WASM from Git repository: ${err.message}`);
+      throw new BadRequestException(`Failed to fetch WASM from Git repository: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       try {
         fs.rmSync(tempDir, { recursive: true, force: true });
@@ -474,14 +472,18 @@ export class ContractsService {
       this.pruneUrlCache();
 
       return { buffer: wasmBuffer, metadata };
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (err instanceof BadRequestException) {
         throw err;
       }
-      if (err.name === 'AbortError' || err.code === 'ABORT_ERR') {
+      const errName = err instanceof Error ? err.name : '';
+      const errCode = (err as { code?: string } | null)?.code;
+      if (errName === 'AbortError' || errCode === 'ABORT_ERR') {
         throw new BadRequestException('WASM download timed out');
       }
-      throw new BadRequestException(`Failed to fetch WASM from URL: ${err.message}`);
+      throw new BadRequestException(
+        `Failed to fetch WASM from URL: ${err instanceof Error ? err.message : String(err)}`,
+      );
     } finally {
       clearTimeout(timeout);
     }

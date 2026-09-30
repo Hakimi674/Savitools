@@ -257,6 +257,7 @@ export class ContractsController {
   @ApiResponse({ status: 403, description: 'Not authorized' })
   @ApiResponse({ status: 422, description: 'SHA-256 checksum verification failed' })
   async uploadWasm(@Req() req: FastifyRequest) {
+    /* eslint-disable @typescript-eslint/no-explicit-any -- @fastify/multipart field shapes are not worth typing here */
     const file = await req.file();
     const fields = file ? file.fields : (req.body as any) || {};
 
@@ -289,6 +290,7 @@ export class ContractsController {
       checksum: typeof checksumField === 'string' ? checksumField : undefined,
       source: gitRepoUrl ? 'git' : 'file',
     });
+    /* eslint-enable @typescript-eslint/no-explicit-any */
   }
 
   @Post(':contractId/invoke')

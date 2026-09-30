@@ -133,6 +133,11 @@
       "auth": "public"
     },
     {
+      "method": "POST",
+      "path": "/api/v1/composer/fee-bump/inspect",
+      "auth": "public"
+    },
+    {
       "method": "GET",
       "path": "/api/v1/composer/operations",
       "auth": "public"

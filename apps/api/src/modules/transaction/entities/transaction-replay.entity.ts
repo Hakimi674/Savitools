@@ -32,15 +32,18 @@ export class TransactionReplay {
   originalXdr!: string;
 
   @Column({ name: 'original_details', type: 'jsonb', nullable: true })
+  /* eslint-disable-next-line @typescript-eslint/no-explicit-any -- jsonb payloads are schema-less */
   originalDetails!: any;
 
   @Column({ name: 'modified_xdr', type: 'text' })
   modifiedXdr!: string;
 
   @Column({ type: 'jsonb' })
+  /* eslint-disable-next-line @typescript-eslint/no-explicit-any -- jsonb payloads are schema-less */
   modifications!: any;
 
   @Column({ name: 'simulation_result', type: 'jsonb' })
+  /* eslint-disable-next-line @typescript-eslint/no-explicit-any -- jsonb payloads are schema-less */
   simulationResult!: any;
 
   @Column({ type: 'boolean', default: false })
@@ -50,6 +53,7 @@ export class TransactionReplay {
   submittedHash!: string | null;
 
   @Column({ name: 'submission_result', type: 'jsonb', nullable: true })
+  /* eslint-disable-next-line @typescript-eslint/no-explicit-any -- jsonb payloads are schema-less */
   submissionResult!: any | null;
 
   @CreateDateColumn({ name: 'created_at' })

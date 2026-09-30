@@ -62,6 +62,20 @@ export class FederationController {
     return this.federationService.getSepSupport(query.domain);
   }
 
+  @Get('diagnostics')
+  @ApiOperation({
+    summary:
+      'Diagnose a federation server: TOML discovery, both lookup directions, staged error classification, redacted report',
+  })
+  @ApiQuery({
+    name: 'domain',
+    description: 'Anchor domain with a stellar.toml declaring FEDERATION_SERVER',
+    example: 'stellar.org',
+  })
+  getDiagnostics(@Query() query: DiagnosticsQueryDto) {
+    return this.federationService.getServerDiagnostics(query.domain);
+  }
+
   @Get('link-preview')
   @ApiOperation({
     summary:
