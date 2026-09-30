@@ -2,12 +2,14 @@
 
 import {
   fetchAssetMetadata,
+  fetchFederationDiagnostics,
   fetchSepSupport,
   fetchStellarToml,
   previewTransferLink,
   resolveFederation,
   validateHomeDomain,
   type FederationResolveResult,
+  type FederationDiagnosticsReport,
   type HomeDomainValidationResult,
   type SepResult,
   type TomlResult,
@@ -30,6 +32,7 @@ import {
   Search,
   RefreshCw,
   Shield,
+  Stethoscope,
   Trash2,
   XCircle,
 } from 'lucide-react';
@@ -86,6 +89,54 @@ function useCopy() {
     setTimeout(() => setCopied(null), 1500);
   }, []);
   return { copied, copy };
+}
+
+function DiagnosticsPanel({
+  domain,
+  copied,
+  copy,
+}: {
+  domain: string;
+  copied: string | null;
+  copy: (text: string, id: string) => void;
+}) {
+  const [report, setReport] = useState<FederationDiagnosticsReport | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const run = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setReport(await fetchFederationDiagnostics(domain));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Diagnostics failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const serialized = report ? JSON.stringify(report, null, 2) : '';
+  return (
+    <CollapsiblePanel title="Server Diagnostics" icon={<Stethoscope className="h-4 w-4" />}>
+      <button
+        type="button"
+        onClick={() => void run()}
+        disabled={loading}
+        className="rounded-md bg-primary px-3 py-1.5 text-xs text-primary-foreground disabled:opacity-50"
+      >
+        {loading ? 'Running…' : 'Run diagnostics'}
+      </button>
+      {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
+      {report && (
+        <div className="mt-3 space-y-2">
+          <p className="text-xs">{report.ok ? 'Healthy' : 'Failing'} · {report.totalLatencyMs}ms</p>
+          <pre className="max-h-64 overflow-auto rounded bg-muted p-2 text-xs">{serialized}</pre>
+          <CopyButton text={serialized} id="diagnostics-report" copied={copied} copy={copy} />
+        </div>
+      )}
+    </CollapsiblePanel>
+  );
 }
 
 function CopyButton({

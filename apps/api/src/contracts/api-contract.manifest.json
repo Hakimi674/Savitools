@@ -474,6 +474,11 @@
     },
     {
       "method": "POST",
+      "path": "/api/v1/sandbox/reset",
+      "auth": "public"
+    },
+    {
+      "method": "POST",
       "path": "/api/v1/sdkgen/generate",
       "auth": "public"
     },

@@ -7,6 +7,7 @@ import { SepQueryDto } from './dto/sep-query.dto';
 import { LinkPreviewQueryDto } from './dto/link-preview-query.dto';
 import { AssetMetadataQueryDto } from './dto/asset-metadata-query.dto';
 import { HomeDomainQueryDto } from './dto/home-domain-query.dto';
+import { DiagnosticsQueryDto } from './dto/diagnostics-query.dto';
 
 @ApiTags('federation')
 @Controller('federation')

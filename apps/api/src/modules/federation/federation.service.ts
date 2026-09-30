@@ -735,7 +735,7 @@ export class FederationService {
     issuer: string,
   ): Promise<HomeDomainValidationResult> {
     const cleanDomain = normalizeHomeDomain(domain);
-    if (!isPublicKey(issuer)) {
+    if (!isStellarPublicKey(issuer)) {
       throw new BadRequestException('issuer must be a Stellar public key');
     }
 
@@ -761,7 +761,7 @@ export class FederationService {
     if (!/^[a-zA-Z0-9]{1,12}$/.test(code)) {
       throw new BadRequestException('code must be a 1-12 character alphanumeric asset code');
     }
-    if (!isPublicKey(issuer)) {
+    if (!isStellarPublicKey(issuer)) {
       throw new BadRequestException('issuer must be a Stellar public key');
     }
 
@@ -1226,7 +1226,7 @@ export class FederationService {
     // reverse direction is probed with an ACCOUNTS entry from stellar.toml.
     const accountEntry = Array.isArray(tomlData.ACCOUNTS)
       ? (tomlData.ACCOUNTS as Record<string, unknown>[]).find(
-          (a) => typeof a.PUBLIC_KEY === 'string' && isPublicKey(String(a.PUBLIC_KEY)),
+          (a) => typeof a.PUBLIC_KEY === 'string' && isStellarPublicKey(String(a.PUBLIC_KEY)),
         )
       : undefined;
     const reverseKey = accountEntry ? String(accountEntry.PUBLIC_KEY) : null;

@@ -331,8 +331,10 @@ export class ContractsService {
             reject(new BadRequestException('Git is not installed in this environment; Git-based WASM import is unavailable'));
             return;
           }
-          resolve();
-        },
+          reject(new BadRequestException(`Git command failed: ${error.message}`));
+          return;
+        }
+        resolve();
       );
     });
   }
