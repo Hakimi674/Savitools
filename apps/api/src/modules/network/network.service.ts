@@ -234,14 +234,6 @@ export class NetworkService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  async fetchCurrentStatusForProfile(
-    ownerId: string,
-    profileId: string,
-  ): Promise<NetworkStatus> {
-    return this.fetchCurrentStatus(
-      await this.getNetworkProfile(ownerId, profileId),
-    );
-  }
 
   private async assertHorizonPassphrase(horizonUrl: string, expectedPassphrase: string) {
     const actualPassphrase = await this.fetchNetworkPassphrase(horizonUrl);

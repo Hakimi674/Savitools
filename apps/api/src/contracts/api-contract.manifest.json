@@ -325,47 +325,42 @@
     {
       "method": "GET",
       "path": "/api/v1/network/profiles",
-      "auth": "public"
+      "auth": "jwt"
     },
     {
       "method": "POST",
       "path": "/api/v1/network/profiles",
-      "auth": "public"
+      "auth": "jwt"
     },
     {
       "method": "DELETE",
       "path": "/api/v1/network/profiles/:id",
-      "auth": "public"
+      "auth": "jwt"
     },
     {
       "method": "PUT",
       "path": "/api/v1/network/profiles/:id",
-      "auth": "public"
+      "auth": "jwt"
     },
     {
       "method": "PUT",
       "path": "/api/v1/network/profiles/:id/default",
-      "auth": "public"
+      "auth": "jwt"
     },
     {
       "method": "GET",
       "path": "/api/v1/network/profiles/:id/export",
-      "auth": "public"
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/network/profiles/:id/select",
-      "auth": "public"
+      "auth": "jwt"
     },
     {
       "method": "POST",
       "path": "/api/v1/network/profiles/import",
-      "auth": "public"
+      "auth": "jwt"
     },
     {
       "method": "POST",
       "path": "/api/v1/network/profiles/verify",
-      "auth": "public"
+      "auth": "jwt"
     },
     {
       "method": "GET",
