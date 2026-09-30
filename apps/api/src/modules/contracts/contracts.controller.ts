@@ -8,16 +8,12 @@ import {
   Query,
   BadRequestException,
   ServiceUnavailableException,
-  UnprocessableEntityException,
   UseGuards,
-  Inject,
-  Optional,
 } from '@nestjs/common';
 import { ApiCookieAuth, ApiOperation, ApiTags, ApiConsumes, ApiResponse, ApiParam } from '@nestjs/swagger';
 import { FastifyRequest } from 'fastify';
 import { ContractsService } from './contracts.service';
 import { InvokeContractDto } from './dto/invoke-contract.dto';
-import { DeployContractDto } from './dto/deploy-contract.dto';
 import { DeployWizardDto } from './dto/wizard.dto';
 import { AttachAbiDto } from './dto/attach-abi.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';

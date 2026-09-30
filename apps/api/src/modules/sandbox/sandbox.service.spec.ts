@@ -1,6 +1,6 @@
 import { SandboxService } from './sandbox.service';
 import { BadRequestException } from '@nestjs/common';
-import * as StellarSdk from '@stellar/stellar-sdk';
+import { Keypair } from '@stellar/stellar-sdk';
 
 describe('SandboxService', () => {
   let service: SandboxService;
@@ -26,7 +26,6 @@ describe('SandboxService', () => {
     });
 
     it('public key corresponds to secret key', () => {
-      const { Keypair } = require('@stellar/stellar-sdk');
       const keypair = service.generateKeypair();
 
       const reconstructed = Keypair.fromSecret(keypair.secretKey);
@@ -117,7 +116,6 @@ describe('SandboxService', () => {
     });
 
     it('throws on short destination key', async () => {
-      const { Keypair } = require('@stellar/stellar-sdk');
       const kp = Keypair.random();
 
       await expect(
@@ -131,7 +129,6 @@ describe('SandboxService', () => {
     });
 
     it('throws on zero amount', async () => {
-      const { Keypair } = require('@stellar/stellar-sdk');
       const kp = Keypair.random();
       const dest = Keypair.random().publicKey();
 
@@ -146,7 +143,6 @@ describe('SandboxService', () => {
     });
 
     it('throws on negative amount', async () => {
-      const { Keypair } = require('@stellar/stellar-sdk');
       const kp = Keypair.random();
       const dest = Keypair.random().publicKey();
 
@@ -161,7 +157,6 @@ describe('SandboxService', () => {
     });
 
     it('throws on invalid asset format', async () => {
-      const { Keypair } = require('@stellar/stellar-sdk');
       const kp = Keypair.random();
       const dest = Keypair.random().publicKey();
 

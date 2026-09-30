@@ -1,5 +1,5 @@
 import { IsString, IsOptional, IsHexadecimal, Length } from 'class-validator';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiPropertyOptional } from '@nestjs/swagger';
 
 export class UploadWasmDto {
   @ApiPropertyOptional({

@@ -1865,3 +1865,79 @@ export function assetControlComposerLink(input: {
 
   return `/composer?${params.toString()}`;
 }
+
+// ─── Soroban RPC console (Savitura/Savitools#358) ────────────────────────
+
+export type SorobanRpcNetwork = "testnet" | "mainnet";
+
+export type SorobanRpcParamType =
+  | "string"
+  | "number"
+  | "integer"
+  | "boolean"
+  | "array"
+  | "object";
+
+/** One named parameter of a whitelisted method, as served by the API. */
+export interface SorobanRpcParamSpec {
+  name: string;
+  type: SorobanRpcParamType;
+  required: boolean;
+  description: string;
+  example?: unknown;
+  itemType?: "string" | "integer";
+  /** RegExp source the value must match (hashes, envelopes…). */
+  pattern?: string;
+  patternHint?: string;
+  /** Closed set of accepted values — rendered as a select. */
+  enum?: string[];
+  min?: number;
+  max?: number;
+  maxItems?: number;
+}
+
+export interface SorobanRpcMethodSpec {
+  name: string;
+  summary: string;
+  description: string;
+  params: SorobanRpcParamSpec[];
+}
+
+export interface SorobanRpcError {
+  code: number;
+  message: string;
+  data?: unknown;
+}
+
+export interface SorobanRpcExecuteResult {
+  method: string;
+  network: SorobanRpcNetwork;
+  tookMs: number;
+  result?: unknown;
+  error?: SorobanRpcError;
+}
+
+/** Read-only catalog + JSON schema for every method the console can call. */
+export async function listSorobanRpcMethods() {
+  return apiFetch<{ methods: SorobanRpcMethodSpec[] }>("/soroban-rpc/methods");
+}
+
+export async function getSorobanRpcMethod(method: string) {
+  return apiFetch<SorobanRpcMethodSpec>(`/soroban-rpc/methods/${method}`);
+}
+
+/**
+ * Invoke one whitelisted method. The API validates `params` against the
+ * method schema and only ever forwards the call to its configured endpoint;
+ * write methods such as `sendTransaction` are not exposed.
+ */
+export async function executeSorobanRpc(input: {
+  method: string;
+  params?: Record<string, unknown>;
+  network?: SorobanRpcNetwork;
+}) {
+  return apiFetch<SorobanRpcExecuteResult>("/soroban-rpc/execute", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}

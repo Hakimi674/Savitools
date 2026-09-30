@@ -15,7 +15,6 @@ import type { FastifyReply } from 'fastify';
 
 describe('MonitorController SSE and Metrics', () => {
   let controller: MonitorController;
-  let configService: ConfigService;
 
   const mockMonitorService = {
     createWatch: jest.fn(),
@@ -68,7 +67,6 @@ describe('MonitorController SSE and Metrics', () => {
       .compile();
 
     controller = module.get<MonitorController>(MonitorController);
-    configService = module.get<ConfigService>(ConfigService);
   });
 
   it('exposes metrics via /metrics endpoint', () => {
@@ -118,13 +116,13 @@ describe('MonitorController SSE and Metrics', () => {
   });
 
   it('cleans up connections on client disconnect', async () => {
-    const rawListeners: Record<string, Function> = {};
+    const rawListeners: Record<string, (...args: unknown[]) => unknown> = {};
     const reply = {
       raw: {
         setHeader: jest.fn(),
         flushHeaders: jest.fn(),
         write: jest.fn(),
-        on: jest.fn((event: string, fn: Function) => {
+        on: jest.fn((event: string, fn: (...args: unknown[]) => unknown) => {
           rawListeners[event] = fn;
         }),
         writableEnded: false,

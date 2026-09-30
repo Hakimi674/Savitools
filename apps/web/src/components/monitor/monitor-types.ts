@@ -7,7 +7,8 @@ export type AlertRuleType =
   | 'any_activity'
   | 'balance_above'
   | 'balance_below'
-  | 'transaction_count';
+  | 'transaction_count'
+  | 'event_topic_equals';
 export type NotificationChannel = 'in_app' | 'email' | 'webhook';
 export type DeliveryStatus = 'pending' | 'delivered' | 'failed' | 'retrying';
 
@@ -17,6 +18,7 @@ export interface AlertRule {
   asset?: string;
   threshold?: string;
   windowMinutes?: number;
+  topic?: string;
   channels: NotificationChannel[];
 }
 

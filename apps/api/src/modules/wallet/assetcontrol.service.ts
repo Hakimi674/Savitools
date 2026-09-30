@@ -2,7 +2,6 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import {
   Account,
   Asset,
-  AuthFlag,
   BASE_FEE,
   Networks,
   Operation,

@@ -8,6 +8,12 @@ const transform = {
         moduleResolution: 'node',
         esModuleInterop: true,
         allowJs: true,
+        // ts-jest rewrites `sources` in its inline maps to `file://` URLs, and
+        // babel-plugin-istanbul then keeps those URLs as coverage paths. That
+        // turns into `src/lib/file:/...` entries whose report directories are
+        // named `file:` (with a colon), which `actions/upload-artifact` refuses
+        // to archive. Emitting no map keeps coverage keys on plain file paths.
+        sourceMap: false,
       },
     },
   ],

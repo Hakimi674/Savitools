@@ -16,7 +16,7 @@ import {
   Logger,
   OnModuleDestroy,
 } from '@nestjs/common';
-import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyReply } from 'fastify';
 import { MonitorService } from './monitor.service';
 import { CreateWatchDto } from './dto/create-watch.dto';
 import { PaginationQueryDto } from './dto/pagination-query.dto';

@@ -229,7 +229,7 @@ describe('PlaygroundService#proxyRequest SSRF protections', () => {
   });
 
   it('gives up after too many redirect hops', async () => {
-    fetchMock.mockImplementation(async (url: string) =>
+    fetchMock.mockImplementation(async (_url: string) =>
       jsonResponse(302, {}, { location: `${PROVIDER_ORIGIN}/hop-${Math.random()}` }),
     );
 

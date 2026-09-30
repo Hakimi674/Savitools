@@ -324,7 +324,8 @@ export class ContractsService {
 
   private async execGitCommand(args: string[], cwd: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
-      execFile('git', args, { cwd, timeout: this.gitCloneTimeoutMs, stdio: 'ignore' }, (error) => {
+      const options = { cwd, timeout: this.gitCloneTimeoutMs, stdio: 'ignore' };
+      execFile('git', args, options, (error) => {
         if (error) {
           if (error.message.includes('ENOENT')) {
             reject(new BadRequestException('Git is not installed in this environment; Git-based WASM import is unavailable'));
@@ -662,7 +663,7 @@ export class ContractsService {
     salt: Buffer,
     constructorArgs: xdr.ScVal[],
   ): Promise<string> {
-    const account = await this.timeRpc("get_account", () =>
+    await this.timeRpc("get_account", () =>
       this.rpcServer.getAccount(this.deployer.publicKey()),
     );
     const address = new Address(this.deployer.publicKey());

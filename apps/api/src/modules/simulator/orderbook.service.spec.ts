@@ -24,7 +24,9 @@ jest.mock('redis', () => {
 
 import { BadRequestException } from '@nestjs/common';
 import { OrderbookService } from './orderbook.service';
-const { __mockRedisClient: mockRedisClient } = require('redis');
+const { __mockRedisClient: mockRedisClient } = jest.requireMock('redis') as {
+  __mockRedisClient: Record<string, jest.Mock>;
+};
 
 function horizonOrderBookResponse() {
   return {
