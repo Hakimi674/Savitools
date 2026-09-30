@@ -22,6 +22,10 @@ import { InspectorModule } from "./modules/inspector/inspector.module";
 import { TransactionModule } from "./modules/transaction/transaction.module";
 import { FederationModule } from "./modules/federation/federation.module";
 import { MetricsModule } from "./modules/metrics/metrics.module";
+import { Sep10Module } from "./modules/sep10/sep10.module";
+import { SorobanStorageModule } from "./modules/soroban-storage/soroban-storage.module";
+import { StellarTomlModule } from "./modules/stellar-toml/stellar-toml.module";
+import { SequencePlannerModule } from "./modules/sequence-planner/sequence-planner.module";
 import { DataSource } from "typeorm";
 import { ALL_ENTITIES, ALL_MIGRATIONS } from "./database/database.registry";
 import { validateEnvironment } from "./config/env-validation";
@@ -82,6 +86,10 @@ ThrottlerModule.forRootAsync({
     TransactionModule,
     FederationModule,
     MetricsModule,
+    Sep10Module,
+    SorobanStorageModule,
+    StellarTomlModule,
+    SequencePlannerModule,
   ],
   controllers: [AppController],
   providers: [

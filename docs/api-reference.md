@@ -1670,3 +1670,446 @@ Last-Modified: Mon, 21 Jun 2026 12:34:56 GMT
 - **API Status:** [Check Stellar Horizon Status](https://dashboard.stellar.org/)
 - **Bug Reports:** [GitHub Issues](https://github.com/Savitura/Savitools/issues)
 - **Questions:** Refer to [Stellar Docs](https://developers.stellar.org/)
+
+
+---
+
+### SEP-10 Web Authentication Debugger
+
+#### POST `/sep10/fetch-challenge`
+
+Fetches an authentication challenge from a SEP-10 server.
+
+**Request:**
+```bash
+curl -X POST http://localhost:3001/api/v1/sep10/fetch-challenge \
+  -H "Content-Type: application/json" \
+  -d '{
+    "webAuthEndpoint": "https://testanchor.stellar.org/auth",
+    "clientAccountId": "GABC...",
+    "homeDomain": "testanchor.stellar.org"
+  }'
+```
+
+**Response (200):**
+```json
+{
+  "transaction": "AAAAAgAAAA...",
+  "network_passphrase": "Test SDF Network ; September 2015",
+  "parsed": {
+    "source": "GABC...",
+    "sequence": "0"
+  }
+}
+```
+
+---
+
+#### POST `/sep10/validate-challenge`
+
+Validates a SEP-10 challenge transaction.
+
+**Request:**
+```bash
+curl -X POST http://localhost:3001/api/v1/sep10/validate-challenge \
+  -H "Content-Type: application/json" \
+  -d '{
+    "challengeXdr": "AAAAAgAAAA...",
+    "serverSigningKey": "GABC...",
+    "network": "testnet"
+  }'
+```
+
+**Response (200):**
+```json
+{
+  "isValid": true,
+  "clientAccountId": "GABC...",
+  "timeBounds": {
+    "minTime": "1234567890",
+    "maxTime": "1234567990",
+    "isValid": true
+  },
+  "issues": []
+}
+```
+
+---
+
+#### POST `/sep10/sign-challenge`
+
+Signs a challenge transaction with a keypair.
+
+**Request:**
+```bash
+curl -X POST http://localhost:3001/api/v1/sep10/sign-challenge \
+  -H "Content-Type: application/json" \
+  -d '{
+    "challengeXdr": "AAAAAgAAAA...",
+    "signerSecretKey": "SABC...",
+    "network": "testnet"
+  }'
+```
+
+**Response (200):**
+```json
+{
+  "signedTransaction": "AAAAAgAAAA..."
+}
+```
+
+---
+
+#### POST `/sep10/token-exchange`
+
+Exchanges a signed challenge for a JWT token.
+
+**Request:**
+```bash
+curl -X POST http://localhost:3001/api/v1/sep10/token-exchange \
+  -H "Content-Type: application/json" \
+  -d '{
+    "webAuthEndpoint": "https://testanchor.stellar.org/auth",
+    "signedChallengeXdr": "AAAAAgAAAA..."
+  }'
+```
+
+**Response (200):**
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+}
+```
+
+---
+
+### Soroban Contract Storage Explorer
+
+#### POST `/soroban-storage/query`
+
+Queries contract storage for a specific key.
+
+**Request:**
+```bash
+curl -X POST http://localhost:3001/api/v1/soroban-storage/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "contractId": "CABC...",
+    "key": "balance",
+    "network": "testnet",
+    "keyType": "symbol"
+  }'
+```
+
+**Response (200):**
+```json
+{
+  "key": "balance",
+  "value": {
+    "type": "u128",
+    "value": "1000000"
+  },
+  "lastModified": 12345
+}
+```
+
+---
+
+#### POST `/soroban-storage/compare`
+
+Compares storage between two contracts.
+
+**Request:**
+```bash
+curl -X POST http://localhost:3001/api/v1/soroban-storage/compare \
+  -H "Content-Type: application/json" \
+  -d '{
+    "contractId1": "CABC...",
+    "contractId2": "CDEF...",
+    "key": "balance",
+    "network": "testnet"
+  }'
+```
+
+**Response (200):**
+```json
+{
+  "key": "balance",
+  "contract1": {
+    "value": { "type": "u128", "value": "1000000" },
+    "exists": true
+  },
+  "contract2": {
+    "value": { "type": "u128", "value": "2000000" },
+    "exists": true
+  },
+  "differences": [...]
+}
+```
+
+---
+
+#### POST `/soroban-storage/typed-key`
+
+Generates a properly typed storage key.
+
+**Request:**
+```bash
+curl -X POST http://localhost:3001/api/v1/soroban-storage/typed-key \
+  -H "Content-Type: application/json" \
+  -d '{
+    "keyType": "map",
+    "keyComponents": [
+      { "type": "symbol", "value": "balances" },
+      { "type": "address", "value": "GABC..." }
+    ]
+  }'
+```
+
+**Response (200):**
+```json
+{
+  "key": "AAAADwAAAAhiYWxhbmNlcwAAAAEAAAATAAAA...",
+  "components": [...]
+}
+```
+
+---
+
+### Stellar.toml Editor
+
+#### POST `/stellar-toml/parse`
+
+Parses and validates stellar.toml content.
+
+**Request:**
+```bash
+curl -X POST http://localhost:3001/api/v1/stellar-toml/parse \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "VERSION=\"2.0.0\"\nNETWORK_PASSPHRASE=\"Test SDF Network ; September 2015\"",
+    "strict": true
+  }'
+```
+
+**Response (200):**
+```json
+{
+  "parsed": {
+    "VERSION": "2.0.0",
+    "NETWORK_PASSPHRASE": "Test SDF Network ; September 2015"
+  },
+  "issues": [],
+  "isValid": true
+}
+```
+
+---
+
+#### POST `/stellar-toml/format`
+
+Formats stellar.toml content.
+
+**Request:**
+```bash
+curl -X POST http://localhost:3001/api/v1/stellar-toml/format \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "VERSION=\"2.0.0\"\n[DOCUMENTATION]\nORG_NAME=\"Example\"",
+    "indent": "spaces",
+    "indentSize": 2
+  }'
+```
+
+**Response (200):**
+```json
+{
+  "formatted": "VERSION = \"2.0.0\"\n\n[DOCUMENTATION]\nORG_NAME = \"Example\""
+}
+```
+
+---
+
+#### POST `/stellar-toml/validate`
+
+Validates stellar.toml against SEP-1.
+
+**Request:**
+```bash
+curl -X POST http://localhost:3001/api/v1/stellar-toml/validate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "content": "VERSION=\"2.0.0\"",
+    "level": "strict",
+    "network": "testnet"
+  }'
+```
+
+**Response (200):**
+```json
+{
+  "isValid": true,
+  "issues": [...],
+  "summary": {
+    "errors": 0,
+    "warnings": 1,
+    "infos": 0
+  }
+}
+```
+
+---
+
+#### GET `/stellar-toml/template`
+
+Gets a pre-configured template.
+
+**Query Parameters:**
+- `type`: `minimal`, `anchor`, `issuer`, or `validator`
+
+**Request:**
+```bash
+curl "http://localhost:3001/api/v1/stellar-toml/template?type=anchor"
+```
+
+**Response (200):**
+```json
+{
+  "template": "VERSION=\"2.0.0\"\n..."
+}
+```
+
+---
+
+### Sequence Number Planner
+
+#### GET `/sequence-planner/account-sequence`
+
+Gets the current sequence number for an account.
+
+**Query Parameters:**
+- `account`: Account address
+- `network`: `testnet` or `mainnet`
+
+**Request:**
+```bash
+curl "http://localhost:3001/api/v1/sequence-planner/account-sequence?account=GABC...&network=testnet"
+```
+
+**Response (200):**
+```json
+{
+  "account": "GABC...",
+  "currentSequence": "12345",
+  "nextSequence": "12346"
+}
+```
+
+---
+
+#### POST `/sequence-planner/validate-sequence`
+
+Validates a proposed sequence number.
+
+**Request:**
+```bash
+curl -X POST http://localhost:3001/api/v1/sequence-planner/validate-sequence \
+  -H "Content-Type: application/json" \
+  -d '{
+    "account": "GABC...",
+    "proposedSequence": 12346,
+    "network": "testnet"
+  }'
+```
+
+**Response (200):**
+```json
+{
+  "isValid": true,
+  "currentSequence": "12345",
+  "nextValidSequence": "12346",
+  "gap": 0,
+  "issues": ["Sequence number is valid and ready to use"]
+}
+```
+
+---
+
+#### POST `/sequence-planner/plan`
+
+Plans sequences for multiple transactions with conflict detection.
+
+**Request:**
+```bash
+curl -X POST http://localhost:3001/api/v1/sequence-planner/plan \
+  -H "Content-Type: application/json" \
+  -d '{
+    "transactions": [
+      {
+        "id": "payment-1",
+        "sourceAccount": "GABC...",
+        "description": "Payment transaction"
+      }
+    ],
+    "network": "testnet"
+  }'
+```
+
+**Response (200):**
+```json
+{
+  "plannedTransactions": [...],
+  "conflicts": [],
+  "accountSequences": [...],
+  "summary": {
+    "total": 1,
+    "valid": 1,
+    "conflicts": 0,
+    "warnings": 0
+  }
+}
+```
+
+---
+
+## Error Handling
+
+All endpoints return consistent error responses:
+
+```json
+{
+  "statusCode": 400,
+  "message": "Error description",
+  "error": "BadRequest"
+}
+```
+
+Common status codes:
+- `200`: Success
+- `201`: Created
+- `400`: Bad Request (invalid parameters)
+- `401`: Unauthorized (authentication required)
+- `404`: Not Found
+- `500`: Internal Server Error
+
+---
+
+## Rate Limiting
+
+The API enforces rate limiting via throttling:
+- Default: 100 requests per 60 seconds per IP
+- Configurable via `THROTTLE_LIMIT` and `THROTTLE_TTL` environment variables
+
+Rate limit headers:
+- `X-RateLimit-Limit`: Maximum requests per window
+- `X-RateLimit-Remaining`: Remaining requests
+- `X-RateLimit-Reset`: Time when the limit resets
+
+---
+
+## Support
+
+For API support:
+- Documentation: https://docs.savitools.dev
+- GitHub Issues: https://github.com/your-org/savitools/issues
+- Email: support@savitools.dev
