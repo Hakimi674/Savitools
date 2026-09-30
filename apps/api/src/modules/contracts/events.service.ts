@@ -17,6 +17,7 @@ import {
   DecodedContractEvent,
   EventFilterCriterion,
   applyEventFilters,
+  eventFilterCriteriaError,
 } from "./event-filters";
 import { decodeScVal } from "./scval-decoder";
 import { EventQueryNetwork, QueryEventsDto } from "./dto/query-events.dto";
@@ -232,6 +233,8 @@ export class EventsService {
     events: DecodedContractEvent[],
     criteria: EventFilterCriterion[],
   ): { events: DecodedContractEvent[]; count: number } {
+    const validationError = eventFilterCriteriaError(criteria);
+    if (validationError) throw new BadRequestException(validationError);
     const filtered = applyEventFilters(events, criteria);
     return { events: filtered, count: filtered.length };
   }

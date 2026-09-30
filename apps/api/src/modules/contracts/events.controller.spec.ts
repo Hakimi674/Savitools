@@ -157,6 +157,31 @@ describe('EventsController', () => {
       expect(eventsService.filterEvents).not.toHaveBeenCalled();
     });
 
+    it('rejects more than ten criteria with 400', async () => {
+      const res = await inject({
+        method: 'POST',
+        url: '/contracts/events/filter',
+        payload: {
+          events: [],
+          criteria: Array.from({ length: 11 }, () => ({ kind: 'value_equals', value: 'x' })),
+        },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(eventsService.filterEvents).not.toHaveBeenCalled();
+    });
+
+    it('requires JSON numeric ledger bounds instead of coercing malformed values', async () => {
+      const res = await inject({
+        method: 'POST',
+        url: '/contracts/events/filter',
+        payload: { events: [], criteria: [{ kind: 'ledger_range', from: 'not-a-number' }] },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(eventsService.filterEvents).not.toHaveBeenCalled();
+    });
+
     it('preserves arbitrary event objects through validation', async () => {
       const events = [{ id: 'e1', topic: [{ type: 'scvSymbol', value: 'transfer', raw: 'AAA=' }] }];
       const res = await inject({
