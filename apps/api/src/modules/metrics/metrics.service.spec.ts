@@ -55,7 +55,7 @@ describe("MetricsService", () => {
 
     const actual = Object.fromEntries(
       (
-        service.registry.getMetricsAsArray() as Array<{
+        service.registry.getMetricsAsArray() as unknown as Array<{
           name: string;
           labelNames: string[];
         }>

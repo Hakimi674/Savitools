@@ -23,8 +23,10 @@ import {
 } from '@/lib/api';
 import {
   applyEventFilters,
+  buildEventFilterCriterion,
   describeCriterion,
   formatDecodedValue,
+  MAX_EVENT_FILTER_CRITERIA,
   shortTypeName,
   type EventFilterCriterion,
 } from '@/lib/contract-events';
@@ -464,6 +466,7 @@ export function ContractEventsTool() {
   const [draftValue, setDraftValue] = useState('');
   const [draftFrom, setDraftFrom] = useState('');
   const [draftTo, setDraftTo] = useState('');
+  const [filterError, setFilterError] = useState('');
 
   const [replayOpen, setReplayOpen] = useState(false);
   const [replaySummary, setReplaySummary] = useState<ReplaySummary | null>(null);
@@ -606,24 +609,25 @@ export function ContractEventsTool() {
   };
 
   const addCriterion = () => {
-    if (draftKind === 'ledger_range') {
-      if (!draftFrom.trim() && !draftTo.trim()) return;
-      setCriteria((prev) => [
-        ...prev,
-        {
-          kind: 'ledger_range',
-          ...(draftFrom.trim() ? { from: Number(draftFrom) } : {}),
-          ...(draftTo.trim() ? { to: Number(draftTo) } : {}),
-        },
-      ]);
-      setDraftFrom('');
-      setDraftTo('');
+    if (criteria.length >= MAX_EVENT_FILTER_CRITERIA) {
+      setFilterError(`You can add at most ${MAX_EVENT_FILTER_CRITERIA} filters.`);
       return;
     }
 
-    if (!draftValue.trim()) return;
-    setCriteria((prev) => [...prev, { kind: draftKind, value: draftValue.trim() }]);
-    setDraftValue('');
+    const result = buildEventFilterCriterion(draftKind, draftValue, draftFrom, draftTo);
+    if (!result.criterion) {
+      setFilterError(result.error);
+      return;
+    }
+
+    setCriteria((prev) => [...prev, result.criterion]);
+    setFilterError('');
+    if (draftKind === 'ledger_range') {
+      setDraftFrom('');
+      setDraftTo('');
+    } else {
+      setDraftValue('');
+    }
   };
 
   const replay = async (url: string, secret: string) => {
@@ -759,7 +763,10 @@ export function ContractEventsTool() {
           <div className="flex flex-wrap items-end gap-2">
             <select
               value={draftKind}
-              onChange={(e) => setDraftKind(e.target.value as EventFilterCriterion['kind'])}
+              onChange={(e) => {
+                setDraftKind(e.target.value as EventFilterCriterion['kind']);
+                setFilterError('');
+              }}
               className="rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
             >
               {FILTER_KINDS.map((k) => (
@@ -773,14 +780,20 @@ export function ContractEventsTool() {
               <>
                 <input
                   value={draftFrom}
-                  onChange={(e) => setDraftFrom(e.target.value)}
+                  onChange={(e) => {
+                    setDraftFrom(e.target.value);
+                    setFilterError('');
+                  }}
                   inputMode="numeric"
                   placeholder="from"
                   className="w-24 rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
                 />
                 <input
                   value={draftTo}
-                  onChange={(e) => setDraftTo(e.target.value)}
+                  onChange={(e) => {
+                    setDraftTo(e.target.value);
+                    setFilterError('');
+                  }}
                   inputMode="numeric"
                   placeholder="to"
                   className="w-24 rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
@@ -789,7 +802,10 @@ export function ContractEventsTool() {
             ) : (
               <input
                 value={draftValue}
-                onChange={(e) => setDraftValue(e.target.value)}
+                onChange={(e) => {
+                  setDraftValue(e.target.value);
+                  setFilterError('');
+                }}
                 onKeyDown={(e) => e.key === 'Enter' && addCriterion()}
                 placeholder={
                   draftKind === 'value_type_is' ? 'i128, symbol, map…' : 'transfer, 1000…'
@@ -801,10 +817,14 @@ export function ContractEventsTool() {
             <button
               type="button"
               onClick={addCriterion}
+              disabled={criteria.length >= MAX_EVENT_FILTER_CRITERIA}
               className="rounded-lg border border-border px-3 py-2 text-sm transition-colors hover:bg-muted/40"
             >
               Add filter
             </button>
+            <span className="text-[11px] text-muted-foreground">
+              {criteria.length}/{MAX_EVENT_FILTER_CRITERIA} filters
+            </span>
 
             {filtered.length > 0 && (
               <button
@@ -817,6 +837,12 @@ export function ContractEventsTool() {
               </button>
             )}
           </div>
+
+          {filterError && (
+            <p role="alert" className="mt-2 text-xs text-red-300">
+              {filterError}
+            </p>
+          )}
 
           {criteria.length > 0 && (
             <div className="mt-3 flex flex-wrap items-center gap-1.5">

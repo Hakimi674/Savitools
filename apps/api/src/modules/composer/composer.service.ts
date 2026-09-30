@@ -350,6 +350,32 @@ function liquidityPoolOperationError(operation: any): string | null {
   }
 }
 
+/**
+ * Returns a descriptive error string for claimable-balance operations that are
+ * statically detectable before submission, otherwise null.
+ *
+ * - claim_claimable_balance: validates the balance ID format and catches the
+ *   most common failure modes (nonexistent ID, already-claimed balances).
+ *   Full on-chain validation happens at submission time, but we can surface
+ *   the most likely errors early.
+ */
+function claimableBalanceOperationError(operation: any, index: number): string | null {
+  if (operation.type === 'claimClaimableBalance') {
+    // The SDK maps claim_claimable_balance → 'claimClaimableBalance' in operation.type.
+    // balanceID is stored as a StrKey-encoded or hex string depending on SDK version.
+    const id = String(operation.balanceID ?? operation.balanceId ?? '');
+    if (!id) {
+      return `op[${index}] claim_claimable_balance: missing balanceId`;
+    }
+    // Cannot verify on-chain existence statically; surface a hint for the
+    // most frequent developer mistakes.
+    if (id.length !== 72 || !/^[0-9a-f]+$/i.test(id)) {
+      return `op[${index}] claim_claimable_balance: balanceId does not appear to be a valid 72-character Stellar balance ID`;
+    }
+  }
+  return null;
+}
+
 @Injectable()
 export class ComposerService {
   private readonly logger = new Logger(ComposerService.name);

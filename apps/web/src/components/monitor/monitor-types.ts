@@ -1,13 +1,17 @@
 export type WatchEventType = 'transaction' | 'payment' | 'contract';
+/** Mirrors the API's `EVENT_ALERT_RULE_TYPES` + `STATE_ALERT_RULE_TYPES` union. */
 export type AlertRuleType =
   | 'amount_received_gte'
   | 'amount_sent_gte'
   | 'asset_received'
   | 'tx_failed'
   | 'any_activity'
+  | 'event_topic_equals'
+  | 'failed_contract_call'
   | 'balance_above'
   | 'balance_below'
-  | 'transaction_count';
+  | 'transaction_count'
+  | 'event_topic_equals';
 export type NotificationChannel = 'in_app' | 'email' | 'webhook';
 export type DeliveryStatus = 'pending' | 'delivered' | 'failed' | 'retrying';
 
@@ -17,6 +21,7 @@ export interface AlertRule {
   asset?: string;
   threshold?: string;
   windowMinutes?: number;
+  topic?: string;
   channels: NotificationChannel[];
 }
 

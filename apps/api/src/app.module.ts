@@ -22,6 +22,7 @@ import { InspectorModule } from "./modules/inspector/inspector.module";
 import { TransactionModule } from "./modules/transaction/transaction.module";
 import { FederationModule } from "./modules/federation/federation.module";
 import { MetricsModule } from "./modules/metrics/metrics.module";
+import { SorobanRpcModule } from "./modules/soroban-rpc/soroban-rpc.module";
 import { DataSource } from "typeorm";
 import { ALL_ENTITIES, ALL_MIGRATIONS } from "./database/database.registry";
 import { validateEnvironment } from "./config/env-validation";
@@ -82,6 +83,7 @@ ThrottlerModule.forRootAsync({
     TransactionModule,
     FederationModule,
     MetricsModule,
+    SorobanRpcModule,
   ],
   controllers: [AppController],
   providers: [

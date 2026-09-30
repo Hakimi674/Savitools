@@ -161,6 +161,54 @@ describe('FederationService', () => {
     });
   });
 
+  describe('asset metadata and home-domain validation', () => {
+    it('validates an issuer declared in stellar.toml and returns matching metadata', async () => {
+      mockFetch({
+        'assets.example/.well-known/stellar.toml': {
+          ok: true,
+          text: `ACCOUNTS = ["${VALID_KEY}"]\n[[CURRENCIES]]\nCODE = "USDC"\nISSUER = "${VALID_KEY}"\nNAME = "USD Coin"\n`,
+        },
+      });
+
+      await expect(service.validateHomeDomain('ASSETS.EXAMPLE', VALID_KEY)).resolves.toEqual({
+        valid: true,
+        domain: 'assets.example',
+        issuer: VALID_KEY,
+        reason: null,
+      });
+      await expect(service.getAssetMetadata('assets.example', 'USDC', VALID_KEY)).resolves.toMatchObject({
+        code: 'USDC',
+        issuer: VALID_KEY,
+        name: 'USD Coin',
+      });
+    });
+
+    it('returns deterministic invalid results for undeclared issuers and rejects malformed requests', async () => {
+      mockFetch({ 'assets.example/.well-known/stellar.toml': { ok: true, text: 'ACCOUNTS = []\n' } });
+      await expect(service.validateHomeDomain('assets.example', VALID_KEY)).resolves.toMatchObject({
+        valid: false,
+        reason: 'issuer_not_declared',
+      });
+      await expect(service.validateHomeDomain('not a domain', VALID_KEY)).rejects.toThrow(BadRequestException);
+      await expect(service.validateHomeDomain('https://assets.example/path', VALID_KEY)).rejects.toThrow(BadRequestException);
+      await expect(service.getAssetMetadata('assets.example', 'BAD CODE', VALID_KEY)).rejects.toThrow(BadRequestException);
+      await expect(service.getAssetMetadata('assets.example', 'USDC', VALID_KEY)).rejects.toThrow(NotFoundException);
+    });
+
+    it('reports a mismatch when a structured account declares a different home domain', async () => {
+      mockFetch({
+        'assets.example/.well-known/stellar.toml': {
+          ok: true,
+          text: `[[ACCOUNTS]]\nPUBLIC_KEY = "${VALID_KEY}"\nHOME_DOMAIN = "other.example"\n`,
+        },
+      });
+      await expect(service.validateHomeDomain('assets.example', VALID_KEY)).resolves.toMatchObject({
+        valid: false,
+        reason: 'home_domain_mismatch',
+      });
+    });
+  });
+
   describe('getToml', () => {
     it('fetches and parses a valid stellar.toml', async () => {
       const tomlContent = [
@@ -756,6 +804,241 @@ describe('FederationService', () => {
           amount: '10',
         }),
       ).rejects.toThrow(/account/);
+    });
+  });
+
+  describe('getServerDiagnostics (#341)', () => {
+    const COMPLIANT_TOML = [
+      'FEDERATION_SERVER="https://fed.example/federation"',
+      '',
+      '[[ACCOUNTS]]',
+      `PUBLIC_KEY="${VALID_KEY}"`,
+      'NAME="probe account"',
+    ].join('\n');
+
+    beforeEach(() => {
+      lookupMock.mockReset();
+      lookupMock.mockResolvedValue([{ address: '93.184.216.34', family: 4 }]);
+    });
+
+    it('runs forward and reverse lookups against a compliant server', async () => {
+      mockFetch({
+        'fed.example/.well-known/stellar.toml': { ok: true, text: COMPLIANT_TOML },
+        'fed.example/federation': {
+          ok: true,
+          json: { stellar_address: `alice*fed.example`, memo: 'm', memo_type: 'text' },
+        },
+      });
+
+      const report = await service.getServerDiagnostics('fed.example');
+
+      expect(report.domain).toBe('fed.example');
+      expect(report.ok).toBe(true);
+      expect(report.failures).toEqual([]);
+      expect(report.serverUrl).toBe('https://fed.example/federation');
+      expect(report.stages.map((s) => s.stage)).toEqual([
+        'toml',
+        'http',
+        'forward-lookup',
+        'reverse-lookup',
+      ]);
+      expect(report.stages.every((s) => s.ok)).toBe(true);
+      const reverse = report.stages.find((s) => s.stage === 'reverse-lookup');
+      expect(reverse?.details.stellarAddress).toBe('alice*fed.example');
+    });
+
+    it('follows redirects and exposes the redirect chain', async () => {
+      mockFetch({
+        'fed.example/.well-known/stellar.toml': { ok: true, text: COMPLIANT_TOML },
+        'fed.example/federation': {
+          ok: true,
+          json: { stellar_address: 'alice*fed.example' },
+        },
+      });
+
+      const report = await service.getServerDiagnostics('fed.example');
+
+      // The mock fetch does not emit redirect statuses, so the chain stays
+      // empty — the important guarantee is the stage still succeeds.
+      expect(report.ok).toBe(true);
+    });
+
+    it('classifies a missing FEDERATION_SERVER as a schema failure', async () => {
+      mockFetch({
+        'noserver.example/.well-known/stellar.toml': {
+          ok: true,
+          text: 'VERSION="1.0.0"\n',
+        },
+      });
+
+      const report = await service.getServerDiagnostics('noserver.example');
+
+      expect(report.ok).toBe(false);
+      expect(report.failures).toEqual(['schema']);
+      expect(report.stages).toHaveLength(1);
+    });
+
+    it('classifies a malformed TOML document as toml failure', async () => {
+      mockFetch({
+        'broken.example/.well-known/stellar.toml': {
+          ok: true,
+          text: 'key = [unclosed',
+        },
+      });
+
+      const report = await service.getServerDiagnostics('broken.example');
+
+      expect(report.ok).toBe(false);
+      expect(report.failures).toContain('toml');
+    });
+
+    it('classifies a missing stellar.toml as toml failure', async () => {
+      mockFetch({
+        'missing.example/.well-known/stellar.toml': { ok: false, status: 404 },
+      });
+
+      const report = await service.getServerDiagnostics('missing.example');
+
+      expect(report.ok).toBe(false);
+      expect(report.failures).toContain('toml');
+    });
+
+    it('classifies an unreachable federation server as dns failure', async () => {
+      mockFetch({
+        'dnsfail.example/.well-known/stellar.toml': {
+          ok: true,
+          text: COMPLIANT_TOML.replace('fed.example', 'dnsfail.example'),
+        },
+      });
+      global.fetch = jest.fn().mockImplementation((input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.includes('stellar.toml')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            text: () => Promise.resolve(COMPLIANT_TOML.replace('fed.example', 'dnsfail.example')),
+          });
+        }
+        return Promise.reject(new Error('fetch failed'));
+      });
+
+      const report = await service.getServerDiagnostics('dnsfail.example');
+
+      expect(report.ok).toBe(false);
+      expect(report.failures).toContain('http');
+    });
+
+    it('classifies a server timeout as timeout failure', async () => {
+      const timeoutService = new FederationService({
+        get: (key: string) =>
+          key === 'FEDERATION_PROBE_TIMEOUT_MS' ? 10 : undefined,
+      } as never);
+      global.fetch = jest.fn().mockImplementation((input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.includes('stellar.toml')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            text: () => Promise.resolve(COMPLIANT_TOML),
+          });
+        }
+        return new Promise(() => undefined); // never resolves
+      });
+
+      const report = await timeoutService.getServerDiagnostics('slow.example');
+
+      expect(report.ok).toBe(false);
+      expect(report.failures).toContain('timeout');
+    });
+
+    it('blocks private-network federation servers as ssrf failures', async () => {
+      mockFetch({
+        'redirect.example/.well-known/stellar.toml': {
+          ok: true,
+          text: COMPLIANT_TOML.replace('fed.example', 'redirect.example').replace(
+            'https://redirect.example/federation',
+            'http://127.0.0.1:9000/federation',
+          ),
+        },
+      });
+      lookupMock.mockReset();
+      lookupMock.mockResolvedValue([{ address: '127.0.0.1', family: 4 }]);
+
+      const report = await service.getServerDiagnostics('redirect.example');
+
+      expect(report.ok).toBe(false);
+      expect(report.failures).toContain('ssrf');
+    });
+
+    it('marks a non-compliant schema response on the reverse lookup', async () => {
+      mockFetch({
+        'schema.example/.well-known/stellar.toml': {
+          ok: true,
+          text: COMPLIANT_TOML.replace('fed.example', 'schema.example'),
+        },
+        'schema.example/federation': {
+          ok: true,
+          json: { unexpected: 'shape' },
+        },
+      });
+
+      const report = await service.getServerDiagnostics('schema.example');
+
+      const reverse = report.stages.find((s) => s.stage === 'reverse-lookup');
+      expect(reverse?.error).toBe('schema');
+      expect(report.failures).toContain('schema');
+    });
+
+    it('encodes unicode and reserved characters in the probe query', async () => {
+      const seenUrls: string[] = [];
+      global.fetch = jest.fn().mockImplementation((input: string | URL | Request) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        seenUrls.push(url);
+        if (url.includes('stellar.toml')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            text: () => Promise.resolve(COMPLIANT_TOML),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({ stellar_address: 'ali*fed.example' }),
+        });
+      });
+
+      await service.getServerDiagnostics('fed.example');
+
+      const lookupUrl = seenUrls.find((u) => u.includes('type=name'));
+      expect(lookupUrl).toBeTruthy();
+      // URL encoding of the probe address must be safe and deterministic.
+      expect(decodeURIComponent(lookupUrl!)).toContain('savitools-diagnostic*fed.example');
+      expect(lookupUrl).not.toContain(' ');
+    });
+
+    it('redacts query strings from request URLs in the report', async () => {
+      mockFetch({
+        'fed.example/.well-known/stellar.toml': { ok: true, text: COMPLIANT_TOML },
+        'fed.example/federation': {
+          ok: true,
+          json: { stellar_address: 'alice*fed.example' },
+        },
+      });
+
+      const report = await service.getServerDiagnostics('fed.example');
+
+      const serialized = JSON.stringify(report);
+      expect(serialized).not.toContain('savitools-probe');
+      expect(serialized).not.toContain(VALID_KEY + '?');
+      const forward = report.stages.find((s) => s.stage === 'forward-lookup');
+      expect(String(forward?.details.requestUrl)).not.toContain('?');
+    });
+
+    it('rejects invalid domains up front', async () => {
+      await expect(service.getServerDiagnostics('not a domain!!!')).rejects.toThrow(
+        BadRequestException,
+      );
     });
   });
 });

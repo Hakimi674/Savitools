@@ -54,8 +54,27 @@ export class ApiKey {
   @Column({ name: 'provider_origin', type: 'varchar', nullable: true })
   providerOrigin!: string | null;
 
+  /**
+   * Display mask (`first8...last4`) of the plaintext, computed while the
+   * plaintext is in hand at write time.
+   *
+   * The mask is a property of the plaintext and never changes between reads, so
+   * the list paths serve it from this column instead of decrypting every stored
+   * key on every request (Savitura/Savitools#293). Null on rows written before
+   * the column existed — those are backfilled on the first read.
+   */
+  @Column({ name: 'masked_key', type: 'varchar', nullable: true })
+  maskedKey!: string | null;
+
   @Column({ type: 'jsonb', nullable: true })
   openApiSpec!: Record<string, unknown> | null;
+
+  /**
+   * Precomputed mask (first8...last4) of the decrypted key, stored to avoid
+   * decrypting on every list operation. Computed at save/update time.
+   */
+  @Column({ name: 'key_preview', type: 'varchar', nullable: true })
+  keyPreview!: string | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;

@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 
-export type Network = 'testnet' | 'mainnet' | 'custom';
+export type Network = 'testnet' | 'mainnet' | 'quickstart' | 'custom';
 
 export interface NetworkProfile {
   id: string;
@@ -44,6 +44,10 @@ const TESTNET_FRIENDBOT = 'https://friendbot.stellar.org';
 const MAINNET_HORIZON = 'https://horizon.stellar.org';
 const MAINNET_PASSPHRASE = 'Public Global Stellar Network ; September 2015';
 const MAINNET_FRIENDBOT = '';
+
+const QUICKSTART_HORIZON = 'http://localhost:8000';
+const QUICKSTART_PASSPHRASE = 'Standalone Network ; February 2017';
+const QUICKSTART_FRIENDBOT = 'http://localhost:8000/friendbot';
 
 const STORAGE_KEYS = {
   profiles: 'savitools:profiles',
@@ -88,6 +92,16 @@ function getBuiltInProfile(network: Network): NetworkProfile {
       horizonUrl: MAINNET_HORIZON,
       networkPassphrase: MAINNET_PASSPHRASE,
       friendbotUrl: MAINNET_FRIENDBOT,
+      isDefault: false,
+    };
+  }
+  if (network === 'quickstart') {
+    return {
+      id: 'quickstart',
+      name: 'Quickstart (Local)',
+      horizonUrl: QUICKSTART_HORIZON,
+      networkPassphrase: QUICKSTART_PASSPHRASE,
+      friendbotUrl: QUICKSTART_FRIENDBOT,
       isDefault: false,
     };
   }
@@ -158,7 +172,7 @@ export function NetworkProvider( { children }: { children: React.ReactNode }) {
     }
 
     const storedNetwork = readStorage(STORAGE_KEYS.network);
-    if (storedNetwork === 'mainnet' || storedNetwork === 'testnet') {
+    if (storedNetwork === 'mainnet' || storedNetwork === 'testnet' || storedNetwork === 'quickstart') {
       setNetworkState(storedNetwork);
     }
   }, []);
@@ -184,9 +198,27 @@ export function NetworkProvider( { children }: { children: React.ReactNode }) {
 
   const activeProfile = activeProfileId ? profiles.find(p => p.id === activeProfileId) || null : null;
 
-  const horizonUrl = activeProfile?.horizonUrl || (network === 'mainnet' ? MAINNET_HORIZON : TESTNET_HORIZON);
-  const networkPassphrase = activeProfile?.networkPassphrase || (network === 'mainnet' ? MAINNET_PASSPHRASE : TESTNET_PASSPHRASE);
-  const friendbotUrl = activeProfile?.friendbotUrl || (network === 'mainnet' ? MAINNET_FRIENDBOT : TESTNET_FRIENDBOT);
+  const horizonUrl =
+    activeProfile?.horizonUrl ||
+    (network === 'mainnet'
+      ? MAINNET_HORIZON
+      : network === 'quickstart'
+        ? QUICKSTART_HORIZON
+        : TESTNET_HORIZON);
+  const networkPassphrase =
+    activeProfile?.networkPassphrase ||
+    (network === 'mainnet'
+      ? MAINNET_PASSPHRASE
+      : network === 'quickstart'
+        ? QUICKSTART_PASSPHRASE
+        : TESTNET_PASSPHRASE);
+  const friendbotUrl =
+    activeProfile?.friendbotUrl ||
+    (network === 'mainnet'
+      ? MAINNET_FRIENDBOT
+      : network === 'quickstart'
+        ? QUICKSTART_FRIENDBOT
+        : TESTNET_FRIENDBOT);
 
   const setActiveProfile = useCallback((id: string | null) => {
     if (id === null) {

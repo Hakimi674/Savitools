@@ -2,12 +2,9 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsArray,
   IsIn,
-  IsInt,
   IsObject,
   IsOptional,
   IsString,
-  Max,
-  Min,
 } from 'class-validator';
 
 /** Maximum accepted ABI/interface document size in bytes (serialized JSON). */

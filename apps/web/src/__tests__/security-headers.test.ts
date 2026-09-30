@@ -92,7 +92,10 @@ describe('Security Headers', () => {
     const permissionsPolicy = (await loadHeaders())['permissions-policy'];
 
     expect(permissionsPolicy).toContain('accelerometer=()');
-    expect(permissionsPolicy).toContain('camera=()');
+    // `self` keeps camera access for same-origin pages only so the offline QR
+    // handoff can scan frames (Savitura/Savitools#344).
+    expect(permissionsPolicy).toContain('camera=(self)');
+    expect(permissionsPolicy).not.toContain('camera=()');
     expect(permissionsPolicy).toContain('geolocation=()');
     expect(permissionsPolicy).toContain('microphone=()');
     expect(permissionsPolicy).toContain('payment=()');

@@ -1,4 +1,12 @@
+import { TextDecoder, TextEncoder } from 'util';
+
 import '@testing-library/jest-dom';
+
+// jsdom does not ship `TextEncoder`/`TextDecoder`, which the QR handoff CRC32
+// relies on. Node provides them, so reuse the host implementations.
+if (typeof globalThis.TextEncoder === 'undefined') {
+  Object.assign(globalThis, { TextEncoder, TextDecoder });
+}
 
 // jsdom does not implement `scrollIntoView`, which the command palette calls on
 // the active option to keep it scrolled into view while arrowing through items.

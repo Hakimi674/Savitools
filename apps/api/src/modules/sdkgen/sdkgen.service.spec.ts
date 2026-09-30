@@ -221,4 +221,20 @@ describe('SdkgenService', () => {
       service.generate({ spec: 'fluxa', language: 'rust', endpoint: '/test' }),
     ).toThrow('Language rust is not supported');
   });
+
+  it('reports which specs it loaded', () => {
+    const service = new SdkgenService();
+
+    expect(service.loadedSpecs()).toEqual(['fluxa', 'crowdpay']);
+  });
+
+  it('refuses to boot when a bundled spec cannot be read', () => {
+    readFileSync.mockImplementation(() => {
+      throw new Error('ENOENT: no such file or directory, open ...');
+    });
+
+    expect(() => new SdkgenService()).toThrow(
+      /Failed to load OpenAPI spec "fluxa"/,
+    );
+  });
 });
