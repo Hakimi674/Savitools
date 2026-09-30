@@ -153,7 +153,37 @@
     "masterWeight": "Master Key Weight",
     "signersList": "Signers List",
     "weight": "Weight",
-    "keyType": "Key Type"
+    "keyType": "Key Type",
+    "authEntry": {
+      "title": "Soroban Authorization Entry Inspector",
+      "description": "Decode SorobanAuthorizationEntry XDR to review credentials and nested invocations.",
+      "inputLabel": "Authorization entries",
+      "inputPlaceholder": "Paste one XDR string, a JSON array of XDR strings, or authorization data from a simulation response",
+      "currentLedger": "Current ledger (optional)",
+      "inspect": "Inspect",
+      "inspecting": "Inspecting…",
+      "exportSanitized": "Export sanitized JSON",
+      "views": {
+        "tree": "Tree",
+        "raw": "Raw",
+        "canonical": "Canonical"
+      },
+      "expired": "Expired",
+      "nearExpiry": "Near expiry",
+      "active": "Active",
+      "ledgesRemaining": "{count} ledgess",
+      "credentials": "Credentials",
+      "nonce": "Nonce",
+      "signatureExpirationLedger": "Signature expiration ledger",
+      "signaturePayloads": "Signature payloads",
+      "contract": "Contract",
+      "wasmHash": "Wasm hash",
+      "arguments": "Arguments",
+      "wasmArguments": "Wasm arguments",
+      "subCalls": "{count} sub-calls",
+      "noSubCalls": "no sub-calls",
+      "entryLabel": "Entry #{index}"
+    }
   },
   "sandbox": {
     "title": "Sandbox",

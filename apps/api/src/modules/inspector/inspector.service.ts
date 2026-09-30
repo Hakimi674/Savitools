@@ -12,6 +12,7 @@ import {
   groupSorobanEventsByContract,
   parseSorobanEventsFromMeta,
 } from './event-parser';
+import { decodeAuthorizationEntry, DecodedAuthorizationEntry } from './auth-entry-decoder';
 
 export interface DecodedEffect {
   type: string;
@@ -73,6 +74,17 @@ export interface ComposerPayload {
   network: string;
   memo: string | undefined;
   operations: Array<Record<string, unknown> & { type: string }>;
+}
+
+export interface AuthorizationEntryInspection {
+  entries: DecodedAuthorizationEntry[];
+  diagnostics: string[];
+  currentLedger: number | null;
+}
+
+export interface SanitizedAuthorizationEntry {
+  entries: Array<Record<string, unknown>>;
+  diagnostics: string[];
 }
 
 @Injectable()
@@ -386,7 +398,89 @@ export class InspectorService {
     };
   }
 
+  // ─── POST /inspector/auth-entry ──────────────────────────────────────────
+
+  /**
+   * Inspect one or more SorobanAuthorizationEntry XDR blobs (base64) or a
+   * simulation response fragment containing them. Returns a decoded tree plus
+   * field-level diagnostics; malformed entries never throw.
+   */
+  inspectAuthorizationEntries(
+    input: string | string[] | Record<string, unknown>,
+    currentLedger?: number,
+  ): AuthorizationEntryInspection {
+    const diagnostics: string[] = [];
+    const rawEntries = this.collectAuthorizationEntryXdr(input, diagnostics);
+
+    const entries: DecodedAuthorizationEntry[] = [];
+    for (let i = 0; i < rawEntries.length; i++) {
+      try {
+        const decoded = decodeAuthorizationEntry(rawEntries[i]!, currentLedger);
+        entries.push(decoded);
+        for (const d of decoded.diagnostics) {
+          diagnostics.push(`entry[${i}]: ${d}`);
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        diagnostics.push(`entry[${i}]: failed to decode — ${msg}`);
+      }
+    }
+
+    return {
+      entries,
+      diagnostics,
+      currentLedger: typeof currentLedger === 'number' ? currentLedger : null,
+    };
+  }
+
+  /**
+   * Sanitized export: same shape as inspection but with signature material
+   * stripped from every credential and invocation.
+   */
+  sanitizeAuthorizationEntries(
+    inspection: AuthorizationEntryInspection,
+  ): SanitizedAuthorizationEntry {
+    return {
+      entries: inspection.entries.map((e) => e.sanitized),
+      diagnostics: inspection.diagnostics,
+    };
+  }
+
   // ─── Helpers ─────────────────────────────────────────────────────────────
+
+  private collectAuthorizationEntryXdr(
+    input: string | string[] | Record<string, unknown>,
+    diagnostics: string[],
+  ): string[] {
+    if (typeof input === 'string') {
+      return [input];
+    }
+    if (Array.isArray(input)) {
+      return input.filter((v): v is string => typeof v === 'string');
+    }
+    if (input && typeof input === 'object') {
+      const obj = input as Record<string, unknown>;
+      const candidates: string[] = [];
+      const pushIfString = (v: unknown) => {
+        if (typeof v === 'string' && v.length > 0) candidates.push(v);
+      };
+      pushIfString(obj.authXdr);
+      pushIfString(obj.auth);
+      pushIfString(obj.xdr);
+      if (Array.isArray(obj.auth)) {
+        for (const a of obj.auth) pushIfString(a);
+      }
+      if (Array.isArray(obj.entries)) {
+        for (const a of obj.entries) pushIfString(a);
+      }
+      if (candidates.length === 0) {
+        diagnostics.push('No authorization entry XDR found in provided object.');
+      }
+      return candidates;
+    }
+    diagnostics.push('Unsupported input type for authorization entry inspection.');
+    return [];
+  }
 
   private extractOpResultCodes(resultXdr: string, _passphrase: string): (string | null)[] {
     try {

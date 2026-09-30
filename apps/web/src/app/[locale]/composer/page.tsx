@@ -11,7 +11,7 @@ export default function ComposerPage() {
         description="Visual builder for multi-operation Stellar transactions."
         docsHref="/docs/composer"
       >
-        <Suspense fallback={<p className="text-sm text-muted-foreground">Loading…</p>}>
+        <Suspense fallback={<p className="text-sm text-muted-foreground">Loading...</p>}>
           <ErrorBoundary toolName="Composer">
             <ComposerTool />
           </ErrorBoundary>
