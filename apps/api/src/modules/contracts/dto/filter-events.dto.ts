@@ -6,10 +6,16 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  Max,
+  MaxLength,
   Min,
   ValidateNested,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  MAX_EVENT_FILTER_CRITERIA,
+  MAX_EVENT_FILTER_VALUE_LENGTH,
+} from '../event-filters';
 
 export const FILTER_MAX_EVENTS = 1000;
 
@@ -28,20 +34,21 @@ export class EventFilterCriterionDto {
   @ApiPropertyOptional({ description: 'Required for every kind except ledger_range.' })
   @IsOptional()
   @IsString()
+  @MaxLength(MAX_EVENT_FILTER_VALUE_LENGTH)
   value?: string;
 
   @ApiPropertyOptional({ description: 'Inclusive lower bound, ledger_range only.' })
   @IsOptional()
-  @Type(() => Number)
   @IsInt()
   @Min(0)
+  @Max(Number.MAX_SAFE_INTEGER)
   from?: number;
 
   @ApiPropertyOptional({ description: 'Inclusive upper bound, ledger_range only.' })
   @IsOptional()
-  @Type(() => Number)
   @IsInt()
   @Min(0)
+  @Max(Number.MAX_SAFE_INTEGER)
   to?: number;
 }
 
@@ -57,6 +64,7 @@ export class FilterEventsDto {
 
   @ApiProperty({ type: [EventFilterCriterionDto] })
   @IsArray()
+  @ArrayMaxSize(MAX_EVENT_FILTER_CRITERIA)
   @ValidateNested({ each: true })
   @Type(() => EventFilterCriterionDto)
   criteria!: EventFilterCriterionDto[];

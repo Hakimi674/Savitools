@@ -927,6 +927,30 @@ curl "http://localhost:3001/api/v1/network/status/history?network=testnet"
 
 ### Contracts (Soroban)
 
+#### GET `/contracts/events`
+
+Fetch and decode Soroban events for a contract. This read-only endpoint does not require authentication.
+
+**Query parameters:** `contractId` (required), `network` (`testnet` or `mainnet`, default `testnet`), `type` (`contract`, `system`, or `diagnostic`), `startLedger` or `cursor` (mutually exclusive), `endLedger`, and `limit` (1–200).
+
+#### POST `/contracts/events/filter`
+
+Filter decoded events in memory. The request accepts up to 1,000 events and 10 criteria. Criteria are ANDed. Text criteria (`topic_contains`, `value_type_is`, `value_equals`) require a non-empty `value` of at most 256 characters. A `ledger_range` requires `from` or `to`; supplied bounds must be non-negative safe integers and `from` must not exceed `to`. Invalid criteria return `400`.
+
+```json
+{
+  "events": [],
+  "criteria": [
+    { "kind": "topic_contains", "value": "transfer" },
+    { "kind": "ledger_range", "from": 100, "to": 200 }
+  ]
+}
+```
+
+#### POST `/contracts/events/replay`
+
+Replay filtered events to a webhook. This endpoint requires authentication; URLs are checked against SSRF protections. See the [Contract Events guide](contract-events.md).
+
 #### POST `/contracts/deploy`
 
 Deploy a Soroban smart contract from a WASM file.

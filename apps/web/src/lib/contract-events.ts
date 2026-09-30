@@ -12,6 +12,62 @@ export type EventFilterCriterion =
   | { kind: 'value_equals'; value: string }
   | { kind: 'ledger_range'; from?: number; to?: number };
 
+export const MAX_EVENT_FILTER_CRITERIA = 10;
+export const MAX_EVENT_FILTER_VALUE_LENGTH = 256;
+
+export type EventFilterBuildResult =
+  | { criterion: EventFilterCriterion; error: null }
+  | { criterion: null; error: string };
+
+/** Parse builder inputs without accepting NaN, unsafe integers, or inverted ranges. */
+export function buildEventFilterCriterion(
+  kind: EventFilterCriterion['kind'],
+  value: string,
+  from: string,
+  to: string,
+): EventFilterBuildResult {
+  if (kind !== 'ledger_range') {
+    const normalized = value.trim();
+    if (!normalized) return { criterion: null, error: 'Enter a value for this filter.' };
+    if (normalized.length > MAX_EVENT_FILTER_VALUE_LENGTH) {
+      return {
+        criterion: null,
+        error: `Filter values must be ${MAX_EVENT_FILTER_VALUE_LENGTH} characters or fewer.`,
+      };
+    }
+    return { criterion: { kind, value: normalized }, error: null };
+  }
+
+  const parseBound = (raw: string): number | null | 'invalid' => {
+    const normalized = raw.trim();
+    if (!normalized) return null;
+    if (!/^\d+$/.test(normalized)) return 'invalid';
+    const parsed = Number(normalized);
+    return Number.isSafeInteger(parsed) ? parsed : 'invalid';
+  };
+
+  const lower = parseBound(from);
+  const upper = parseBound(to);
+  if (lower === 'invalid' || upper === 'invalid') {
+    return { criterion: null, error: 'Ledger bounds must be non-negative safe integers.' };
+  }
+  if (lower === null && upper === null) {
+    return { criterion: null, error: 'Enter at least one ledger bound.' };
+  }
+  if (lower !== null && upper !== null && lower > upper) {
+    return { criterion: null, error: 'The lower ledger bound must not exceed the upper bound.' };
+  }
+
+  return {
+    criterion: {
+      kind: 'ledger_range',
+      ...(lower !== null ? { from: lower } : {}),
+      ...(upper !== null ? { to: upper } : {}),
+    },
+    error: null,
+  };
+}
+
 export function describeCriterion(criterion: EventFilterCriterion): string {
   switch (criterion.kind) {
     case 'topic_contains':

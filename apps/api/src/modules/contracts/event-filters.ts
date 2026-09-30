@@ -6,6 +6,65 @@ export type EventFilterCriterion =
   | { kind: 'value_equals'; value: string }
   | { kind: 'ledger_range'; from?: number; to?: number };
 
+export const MAX_EVENT_FILTER_CRITERIA = 10;
+export const MAX_EVENT_FILTER_VALUE_LENGTH = 256;
+
+/** Validate untrusted criteria at the service boundary as well as in the HTTP DTO. */
+export function eventFilterCriteriaError(criteria: unknown): string | null {
+  if (!Array.isArray(criteria)) return 'criteria must be an array';
+  if (criteria.length > MAX_EVENT_FILTER_CRITERIA) {
+    return `criteria must contain at most ${MAX_EVENT_FILTER_CRITERIA} filters`;
+  }
+
+  for (const [index, value] of criteria.entries()) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return `criteria[${index}] must be an object`;
+    }
+
+    const criterion = value as Record<string, unknown>;
+    if (
+      !['topic_contains', 'value_type_is', 'value_equals', 'ledger_range'].includes(
+        String(criterion.kind),
+      )
+    ) {
+      return `criteria[${index}].kind is not supported`;
+    }
+
+    if (criterion.kind === 'ledger_range') {
+      if (criterion.value !== undefined) return `criteria[${index}] ledger_range does not accept value`;
+      const from = criterion.from;
+      const to = criterion.to;
+      if (from === undefined && to === undefined) {
+        return `criteria[${index}] ledger_range requires from or to`;
+      }
+      for (const bound of [from, to]) {
+        if (
+          bound !== undefined &&
+          (typeof bound !== 'number' || !Number.isSafeInteger(bound) || bound < 0)
+        ) {
+          return `criteria[${index}] ledger bounds must be non-negative safe integers`;
+        }
+      }
+      if (from !== undefined && to !== undefined && Number(from) > Number(to)) {
+        return `criteria[${index}] from must not exceed to`;
+      }
+      continue;
+    }
+
+    if (criterion.from !== undefined || criterion.to !== undefined) {
+      return `criteria[${index}] ${String(criterion.kind)} does not accept ledger bounds`;
+    }
+    if (typeof criterion.value !== 'string' || !criterion.value.trim()) {
+      return `criteria[${index}].value must be a non-empty string`;
+    }
+    if (criterion.value.length > MAX_EVENT_FILTER_VALUE_LENGTH) {
+      return `criteria[${index}].value must be ${MAX_EVENT_FILTER_VALUE_LENGTH} characters or fewer`;
+    }
+  }
+
+  return null;
+}
+
 export interface DecodedContractEvent {
   id: string;
   type: string;

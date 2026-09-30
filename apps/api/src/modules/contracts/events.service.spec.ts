@@ -263,6 +263,12 @@ describe('EventsService', () => {
       const { events } = await service.queryEvents({ contractId: CONTRACT_ID, startLedger: 1 });
       expect(service.filterEvents(events, [{ kind: 'topic_contains', value: 'burn' }]).count).toBe(0);
     });
+
+    it('rejects semantically invalid criteria before filtering', () => {
+      expect(() =>
+        service.filterEvents([], [{ kind: 'ledger_range', from: 20, to: 10 }]),
+      ).toThrow(BadRequestException);
+    });
   });
 
   describe('replayEvents', () => {

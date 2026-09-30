@@ -4,6 +4,7 @@ import {
   EventFilterCriterion,
   applyEventFilters,
   describeCriterion,
+  eventFilterCriteriaError,
   matchesCriterion,
 } from './event-filters';
 import { decodeScVal } from './scval-decoder';
@@ -64,6 +65,38 @@ describe('event filters', () => {
   });
 
   const all = [transferEvent, mintEvent, approveEvent];
+
+  describe('eventFilterCriteriaError', () => {
+    it('accepts valid text and inclusive ledger criteria', () => {
+      expect(
+        eventFilterCriteriaError([
+          { kind: 'topic_contains', value: 'transfer' },
+          { kind: 'ledger_range', from: 0, to: 0 },
+        ]),
+      ).toBeNull();
+    });
+
+    it.each([
+      [[{ kind: 'ledger_range' }], 'requires from or to'],
+      [[{ kind: 'ledger_range', from: -1 }], 'non-negative safe integers'],
+      [[{ kind: 'ledger_range', from: 0.5 }], 'non-negative safe integers'],
+      [[{ kind: 'ledger_range', from: Number.MAX_SAFE_INTEGER + 1 }], 'non-negative safe integers'],
+      [[{ kind: 'ledger_range', from: 20, to: 10 }], 'from must not exceed to'],
+      [[{ kind: 'value_equals', value: '  ' }], 'non-empty string'],
+      [[{ kind: 'topic_contains', value: 'x'.repeat(257) }], '256 characters or fewer'],
+      [[{ kind: 'other', value: 'x' }], 'not supported'],
+    ])('rejects invalid criteria %#', (criteria, message) => {
+      expect(eventFilterCriteriaError(criteria)).toContain(message);
+    });
+
+    it('caps the number of criteria', () => {
+      expect(
+        eventFilterCriteriaError(
+          Array.from({ length: 11 }, () => ({ kind: 'value_equals', value: 'x' })),
+        ),
+      ).toContain('at most 10');
+    });
+  });
 
   describe('matchesCriterion', () => {
     const cases: Array<[string, EventFilterCriterion, string[]]> = [
