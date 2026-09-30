@@ -15,14 +15,17 @@ import {
   AlertTriangle,
   ExternalLink,
   Search,
+  RotateCcw,
 } from 'lucide-react';
 import {
   sandboxFund,
   sandboxGetAccount,
   sandboxSendPayment,
+  sandboxResetAccount,
   type SandboxAccountDetails,
   type SandboxFundResult,
   type SandboxPaymentResult,
+  type SandboxResetResult,
   type Balance,
 } from '@/lib/api';
 import { useNetwork } from '@/lib/network-context';
@@ -71,6 +74,12 @@ export function SandboxTool() {
   
   const [fundResult, setFundResult] = useState<SandboxFundResult | null>(null);
   const [funding, setFunding] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [resetResult, setResetResult] = useState<SandboxResetResult | null>(null);
+  const [resetError, setResetError] = useState<string | null>(null);
+
+  // True while any network operation is in progress — used to block network switching.
+  const inFlight = generating || funding || resetting;
   
   const [inspector, setInspector] = useState<AccountInspectorState>({
     publicKey: '',
@@ -165,7 +174,7 @@ export function SandboxTool() {
   const handleInspectAccount = useCallback(async (publicKey: string) => {
     setInspector((prev) => ({ ...prev, publicKey, loading: true, error: null, account: null }));
     try {
-      const account = await sandboxGetAccount(publicKey);
+      const account = await sandboxGetAccount(publicKey, network);
       setInspector((prev) => ({ ...prev, account, loading: false }));
       addRecentItem({
         category: 'sandbox',
@@ -177,19 +186,19 @@ export function SandboxTool() {
       const message = err instanceof Error ? err.message : 'Failed to load account';
       setInspector((prev) => ({ ...prev, error: message, loading: false }));
     }
-  }, []);
+  }, [network]);
 
   const handleFund = useCallback(async () => {
     if (!keypair) return;
     setFunding(true);
     setFundResult(null);
     try {
-      const result = await sandboxFund(keypair.publicKey);
+      const result = await sandboxFund(keypair.publicKey, network);
       setFundResult(result);
       addRecentItem({
         category: 'sandbox',
         title: `Funded: ${keypair.publicKey.slice(0, 8)}…`,
-        subtitle: '10,000 testnet XLM received',
+        subtitle: `${network} XLM received`,
         href: '/sandbox',
       });
       // Auto-refresh inspector if it matches
@@ -201,7 +210,26 @@ export function SandboxTool() {
     } finally {
       setFunding(false);
     }
-  }, [keypair, inspector.publicKey, handleInspectAccount]);
+  }, [keypair, network, inspector.publicKey, handleInspectAccount]);
+
+  const handleReset = useCallback(async () => {
+    if (!keypair) return;
+    setResetting(true);
+    setResetResult(null);
+    setResetError(null);
+    try {
+      const result = await sandboxResetAccount(keypair.publicKey, network);
+      setResetResult(result);
+      // Refresh inspector if it is viewing this account
+      if (inspector.publicKey === keypair.publicKey) {
+        handleInspectAccount(keypair.publicKey);
+      }
+    } catch (err) {
+      setResetError(err instanceof Error ? err.message : 'Reset failed');
+    } finally {
+      setResetting(false);
+    }
+  }, [keypair, network, inspector.publicKey, handleInspectAccount]);
 
   const validateAsset = (value: string) => {
     if (value === 'XLM') {
@@ -238,6 +266,7 @@ export function SandboxTool() {
         payment.asset,
         payment.amount,
         payment.memo || undefined,
+        network,
       );
       setPaymentResult(result);
       if (result.txHash) {
@@ -296,6 +325,14 @@ export function SandboxTool() {
 
   const stellarExpertUrl = (txHash: string) => `https://stellar.expert/tx/${txHash}?network=testnet`;
 
+  // Derive a human-readable network label for the active connection.
+  const networkLabel =
+    network === 'mainnet'
+      ? 'Mainnet'
+      : network === 'quickstart'
+        ? 'Quickstart (Local)'
+        : 'Testnet';
+
   // Disable sandbox features on mainnet
   if (network === 'mainnet') {
     return (
@@ -303,7 +340,7 @@ export function SandboxTool() {
         <div className="flex items-start gap-2">
           <AlertTriangle className="h-4 w-4 text-red-600 mt-0.5 shrink-0" />
           <p className="text-xs text-red-700">
-            <strong>Sandbox features are disabled on mainnet.</strong> Switch to testnet to use the wallet sandbox.
+            <strong>Sandbox features are disabled on mainnet.</strong> Switch to testnet or quickstart to use the wallet sandbox.
           </p>
         </div>
       </div>
@@ -312,17 +349,37 @@ export function SandboxTool() {
 
   return (
     <div className="space-y-6">
-      {/* Persistent warning banner */}
-      <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 flex items-start gap-2">
-        <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
-        <p className="text-xs text-amber-700">
-          <strong>This sandbox is for Stellar testnet only. Never use generated keys for real funds.</strong>
-        </p>
+      {/* Persistent safety warning + active network */}
+      <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 flex items-start justify-between gap-2">
+        <div className="flex items-start gap-2">
+          <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+          <p className="text-xs text-amber-700">
+            <strong>Sandbox keys are for testing only. Never use generated keys for real funds.</strong>
+          </p>
+        </div>
+        <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium bg-amber-200/60 text-amber-800">
+          {networkLabel}
+        </span>
       </div>
+
+      {/* Network-switching lockout during in-flight operations */}
+      {inFlight && (
+        <div className="rounded-lg border border-blue-500/30 bg-blue-500/10 p-2.5 flex items-center gap-2">
+          <Loader2 className="h-3 w-3 text-blue-600 animate-spin shrink-0" />
+          <p className="text-xs text-blue-700">
+            Network switching is disabled while an operation is in progress.
+          </p>
+        </div>
+      )}
 
       {/* Generate Keypair Section */}
       <div className="rounded-lg border border-border p-4 space-y-4">
-        <h3 className="text-sm font-medium">Generate Keypair</h3>
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-medium">Generate Keypair</h3>
+          <span className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-muted text-muted-foreground">
+            {networkLabel}
+          </span>
+        </div>
         
         <button
           type="button"
@@ -406,30 +463,51 @@ export function SandboxTool() {
               </p>
             </div>
 
-            {/* Fund on Testnet */}
-            <button
-              type="button"
-              onClick={handleFund}
-              disabled={funding}
-              className="w-full px-3 py-2 text-xs font-medium rounded-md bg-green-600 text-white hover:bg-green-700 disabled:opacity-40 flex items-center justify-center gap-1.5"
-            >
-              {funding ? (
-                <>
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  Funding...
-                </>
-              ) : (
-                <>
-                  <ExternalLink className="h-3 w-3" />
-                  Fund on Testnet
-                </>
-              )}
-            </button>
+            {/* Fund / Reset buttons */}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={handleFund}
+                disabled={funding || resetting}
+                className="px-3 py-2 text-xs font-medium rounded-md bg-green-600 text-white hover:bg-green-700 disabled:opacity-40 flex items-center justify-center gap-1.5"
+              >
+                {funding ? (
+                  <>
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Funding…
+                  </>
+                ) : (
+                  <>
+                    <ExternalLink className="h-3 w-3" />
+                    Fund via Friendbot
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleReset}
+                disabled={resetting || funding}
+                className="px-3 py-2 text-xs font-medium rounded-md bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-40 flex items-center justify-center gap-1.5"
+              >
+                {resetting ? (
+                  <>
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Resetting…
+                  </>
+                ) : (
+                  <>
+                    <RotateCcw className="h-3 w-3" />
+                    Reset Account
+                  </>
+                )}
+              </button>
+            </div>
 
             {fundResult && (
               <div className="rounded-md bg-green-500/10 border border-green-500/30 p-2">
                 <p className="text-xs text-green-700">
-                  <strong>Funded successfully!</strong> {fundResult.startingBalance}
+                  <strong>Funded successfully!</strong> {fundResult.startingBalance} XLM
                 </p>
                 {fundResult.txHash && (
                   <a
@@ -441,6 +519,22 @@ export function SandboxTool() {
                     View transaction <ExternalLink className="h-3 w-3" />
                   </a>
                 )}
+              </div>
+            )}
+
+            {resetError && (
+              <div className="rounded-md bg-red-500/10 border border-red-500/30 p-2">
+                <p className="text-xs text-red-700">
+                  <strong>Reset failed:</strong> {resetError}
+                </p>
+              </div>
+            )}
+
+            {resetResult && !resetError && (
+              <div className="rounded-md bg-orange-500/10 border border-orange-500/30 p-2">
+                <p className="text-xs text-orange-700">
+                  <strong>Account reset.</strong> {resetResult.message}
+                </p>
               </div>
             )}
           </div>

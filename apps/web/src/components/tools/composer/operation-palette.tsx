@@ -5,6 +5,7 @@ import {
   ArrowLeftRight,
   ArrowRightLeft,
   BarChart2,
+  Coins,
   Database,
   Droplets,
   GitMerge,
@@ -15,6 +16,7 @@ import {
   Settings,
   ShieldCheck,
   UserPlus,
+  Archive,
 } from 'lucide-react';
 
 const OP_ICONS: Record<string, React.ElementType> = {
@@ -32,6 +34,8 @@ const OP_ICONS: Record<string, React.ElementType> = {
   manage_data: Database,
   liquidity_pool_deposit: Droplets,
   liquidity_pool_withdraw: Droplets,
+  create_claimable_balance: Coins,
+  claim_claimable_balance: Archive,
 };
 
 const OP_COLORS: Record<string, string> = {
@@ -49,6 +53,8 @@ const OP_COLORS: Record<string, string> = {
   manage_data: 'from-indigo-600/20 to-indigo-600/5 border-indigo-500/30 text-indigo-400',
   liquidity_pool_deposit: 'from-teal-600/20 to-teal-600/5 border-teal-500/30 text-teal-400',
   liquidity_pool_withdraw: 'from-cyan-600/20 to-cyan-600/5 border-cyan-500/30 text-cyan-400',
+  create_claimable_balance: 'from-fuchsia-600/20 to-fuchsia-600/5 border-fuchsia-500/30 text-fuchsia-400',
+  claim_claimable_balance: 'from-purple-600/20 to-purple-600/5 border-purple-500/30 text-purple-400',
 };
 
 interface OperationPaletteProps {

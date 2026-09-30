@@ -11,6 +11,10 @@ import {
 } from '@stellar/stellar-sdk';
 import * as StellarSdk from '@stellar/stellar-sdk';
 import { parseDestination, type ParsedDestination } from './address';
+import {
+  resolveStellarEndpoints,
+  StellarNetworkEndpoints,
+} from './stellar-endpoints';
 
 /** Horizon balance shape both the wallet and sandbox pages render. */
 export interface Balance {
@@ -73,41 +77,56 @@ export interface PaymentRequest {
   memo?: string;
 }
 
-const HORIZON_TESTNET_URL = 'https://horizon-testnet.stellar.org';
-const FRIENDBOT_URL = 'https://friendbot.stellar.org';
 const FRIENDBOT_TIMEOUT_MS = 30000;
 const FRIENDBOT_STARTING_BALANCE = '10,000 XLM';
 
 /**
- * Stellar testnet operations shared by the wallet and sandbox modules.
+ * Stellar network operations shared by the wallet and sandbox modules.
  *
- * Both modules used to carry their own copy of keypair generation, Friendbot
- * funding, account loading, asset parsing and payment submission. The copies
- * had already drifted: only the wallet zeroed the raw secret buffer, and only
- * the sandbox recovered when Friendbot reported a concurrently funded account.
- * The shared behaviour lives here; each module keeps the response shape its
- * own page expects.
+ * Resolved from shared configuration rather than module constants, supporting
+ * public testnet, local Stellar quickstart nodes, and private networks (Savitura/Savitools#323).
  */
 @Injectable()
 export class StellarTestnetService {
   private readonly logger = new Logger(StellarTestnetService.name);
+  private readonly servers = new Map<string, StellarSdk.Horizon.Server>();
 
-  readonly server = new StellarSdk.Horizon.Server(HORIZON_TESTNET_URL);
+  serverFor(network: string = 'testnet', overrides?: any): StellarSdk.Horizon.Server {
+    const endpoints = resolveStellarEndpoints(network, overrides);
+    const cacheKey = `${endpoints.network}:${endpoints.horizonUrl}`;
+    if (!this.servers.has(cacheKey)) {
+      const allowHttp = endpoints.horizonUrl.startsWith('http://');
+      this.servers.set(
+        cacheKey,
+        new StellarSdk.Horizon.Server(endpoints.horizonUrl, { allowHttp }),
+      );
+    }
+    return this.servers.get(cacheKey)!;
+  }
+
+  get server(): StellarSdk.Horizon.Server {
+    return this.serverFor('testnet');
+  }
 
   /**
-   * Random testnet keypair.
+   * Random keypair labelled with its network.
    *
    * The raw secret buffer is overwritten once the string secret has been read,
    * so a copy of the seed does not stay resident in the process.
    */
-  generateKeypair(): { publicKey: string; secretKey: string } {
+  generateKeypair(network: string = 'testnet'): {
+    publicKey: string;
+    secretKey: string;
+    network: string;
+  } {
+    const endpoints = resolveStellarEndpoints(network);
     const keypair = Keypair.random();
     const secretKey = keypair.secret();
     const publicKey = keypair.publicKey();
 
     this.wipeRawSecret(keypair);
 
-    return { publicKey, secretKey };
+    return { publicKey, secretKey, network: endpoints.network };
   }
 
   /**
@@ -138,17 +157,22 @@ export class StellarTestnetService {
   }
 
   /** Load an account, mapping Horizon's "not found" onto the shared 400 copy. */
-  async loadAccount(publicKey: string): Promise<HorizonAccount> {
+  async loadAccount(
+    publicKey: string,
+    network: string = 'testnet',
+    overrides?: any,
+  ): Promise<HorizonAccount> {
+    const srv = this.serverFor(network, overrides);
     try {
-      return (await this.server.loadAccount(
+      return (await srv.loadAccount(
         publicKey,
       )) as unknown as HorizonAccount;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      this.logger.error(`Failed to load account ${publicKey}: ${message}`);
+      this.logger.error(`Failed to load account ${publicKey} on ${network}: ${message}`);
       if (message.includes('not found') || message.includes('404')) {
         throw new BadRequestException(
-          `Account ${publicKey} not found on testnet. Fund it via Friendbot first.`,
+          `Account ${publicKey} not found on ${network}. Fund it via Friendbot first.`,
         );
       }
       throw new BadRequestException(`Failed to load account: ${message}`);
@@ -156,9 +180,14 @@ export class StellarTestnetService {
   }
 
   /** The same load, but a missing account is an expected answer, not an error. */
-  async loadAccountIfPresent(publicKey: string): Promise<HorizonAccount | null> {
+  async loadAccountIfPresent(
+    publicKey: string,
+    network: string = 'testnet',
+    overrides?: any,
+  ): Promise<HorizonAccount | null> {
+    const srv = this.serverFor(network, overrides);
     try {
-      return (await this.server.loadAccount(
+      return (await srv.loadAccount(
         publicKey,
       )) as unknown as HorizonAccount;
     } catch {
@@ -186,13 +215,25 @@ export class StellarTestnetService {
   }
 
   /**
-   * Ask Friendbot for testnet funds.
+   * Ask Friendbot for funds on the selected network.
    *
    * Transport failures throw, because no caller can recover from them. An HTTP
    * failure is returned so the sandbox can treat "already funded" as success.
    */
-  async requestFriendbotFunding(publicKey: string): Promise<FriendbotReply> {
-    const url = `${FRIENDBOT_URL}?addr=${encodeURIComponent(publicKey)}`;
+  async requestFriendbotFunding(
+    publicKey: string,
+    network: string = 'testnet',
+    overrides?: any,
+  ): Promise<FriendbotReply> {
+    const endpoints = resolveStellarEndpoints(network, overrides);
+    const friendbotUrl = endpoints.friendbotUrl;
+    if (!friendbotUrl) {
+      throw new BadRequestException(
+        `Friendbot is not configured for network "${network}". Automatic funding is not supported on this network.`,
+      );
+    }
+
+    const url = `${friendbotUrl}?addr=${encodeURIComponent(publicKey)}`;
 
     let response: Response;
     try {
@@ -202,16 +243,27 @@ export class StellarTestnetService {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       this.logger.error(
-        `Friendbot request failed for ${publicKey}: ${message}`,
+        `Friendbot request failed for ${publicKey} on ${network}: ${message}`,
       );
-      throw new BadRequestException(`Friendbot request failed: ${message}`);
+      throw new BadRequestException(
+        `Friendbot is unavailable for network "${network}" at ${friendbotUrl}. Ensure your local Stellar quickstart container is running and Friendbot is enabled, or use a network profile with an accessible Friendbot. (${message})`,
+      );
     }
 
     if (!response.ok) {
       const body = await response.text().catch(() => '');
       this.logger.error(
-        `Friendbot error for ${publicKey}: ${response.status} ${body}`,
+        `Friendbot error for ${publicKey} on ${network}: ${response.status} ${body}`,
       );
+      if (
+        !body.includes('account already funded') &&
+        !body.includes('op_already_exists') &&
+        (response.status === 404 || response.status >= 500)
+      ) {
+        throw new BadRequestException(
+          `Friendbot is unavailable for network "${network}" at ${friendbotUrl}. Ensure your local Stellar quickstart container is running and Friendbot is enabled, or use a network profile with an accessible Friendbot. (HTTP ${response.status}: ${body || response.statusText})`,
+        );
+      }
       return {
         ok: false,
         status: response.status,
@@ -307,20 +359,32 @@ export class StellarTestnetService {
     return new Asset(parts[0], parts[1]);
   }
 
-  async loadSourceAccount(publicKey: string): Promise<Account> {
+  async loadSourceAccount(
+    publicKey: string,
+    network: string = 'testnet',
+    overrides?: any,
+  ): Promise<Account> {
+    const srv = this.serverFor(network, overrides);
     try {
-      return await this.server.loadAccount(publicKey);
+      return await srv.loadAccount(publicKey);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       this.logger.error(
-        `Failed to load source account ${publicKey}: ${message}`,
+        `Failed to load source account ${publicKey} on ${network}: ${message}`,
       );
       throw new BadRequestException(`Failed to load source account: ${message}`);
     }
   }
 
-  /** Validate, build, sign and submit a testnet payment; returns Horizon's result. */
-  async submitPayment(request: PaymentRequest): Promise<SubmittedTransaction> {
+  /** Validate, build, sign and submit a payment on the selected network; returns Horizon's result. */
+  async submitPayment(
+    request: PaymentRequest,
+    network: string = 'testnet',
+    overrides?: any,
+  ): Promise<SubmittedTransaction> {
+    const endpoints = resolveStellarEndpoints(network, overrides);
+    const srv = this.serverFor(network, overrides);
+
     const sourceKeypair = this.keypairFromSecret(request.sourceSecret);
     this.assertDestination(request.destination);
     this.assertPositiveAmount(request.amount);
@@ -330,11 +394,13 @@ export class StellarTestnetService {
 
     const sourceAccount = await this.loadSourceAccount(
       sourceKeypair.publicKey(),
+      network,
+      overrides,
     );
 
     let builder = new TransactionBuilder(sourceAccount, {
       fee: BASE_FEE,
-      networkPassphrase: Networks.TESTNET,
+      networkPassphrase: endpoints.passphrase,
     }).addOperation(this.buildPaymentOperation(request, asset));
 
     if (request.memo) {
@@ -356,12 +422,12 @@ export class StellarTestnetService {
     transaction.sign(sourceKeypair);
 
     try {
-      return (await this.server.submitTransaction(
+      return (await srv.submitTransaction(
         transaction,
       )) as unknown as SubmittedTransaction;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      this.logger.error(`Transaction submission failed: ${message}`);
+      this.logger.error(`Transaction submission failed on ${network}: ${message}`);
       throw new BadRequestException(`Payment failed: ${message}`);
     }
   }
