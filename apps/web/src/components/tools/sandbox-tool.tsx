@@ -810,7 +810,7 @@ export function SandboxTool() {
                 TX: {paymentResult.txHash.slice(0, 16)}...
               </p>
               <p className="text-xs text-green-600">
-                Fee: {paymentResult.feeCharged} stroops
+                Fee: {paymentResult.feeCharged ?? 'unknown'} stroops
               </p>
               <p className="text-xs text-green-600">
                 Result: {paymentResult.resultCode}

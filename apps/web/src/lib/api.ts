@@ -1050,7 +1050,7 @@ export interface WebhookHistoryEntry {
   statusCode?: number | null;
   responseStatus?: number | null;
   responseHeaders: Record<string, string>;
-  responseBody: any;
+  responseBody: string;
   latencyMs: number;
   timestamp: number;
   error?: string;
@@ -1514,6 +1514,8 @@ export interface SepInfo {
 
 export interface SepResult {
   seps: SepInfo[];
+  /** Additive TOML state, so an unavailable or malformed document is not hidden. */
+  tomlStatus?: "available" | "unavailable" | "malformed";
 }
 
 export async function resolveFederation(address: string) {
