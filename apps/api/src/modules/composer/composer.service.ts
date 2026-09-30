@@ -2,10 +2,13 @@ import {
   BadRequestException,
   Injectable,
   Logger,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import {
   Account,
   Asset,
+  Address,
   BASE_FEE,
   Horizon,
   Keypair,
@@ -15,12 +18,15 @@ import {
   StrKey,
   Transaction,
   TransactionBuilder,
+  nativeToScVal,
   xdr,
 } from '@stellar/stellar-sdk';
 import { BuildTransactionDto, OperationDto } from './dto/build-transaction.dto';
 import { SimulateTransactionDto } from './dto/simulate-transaction.dto';
 import { BenchmarkTransactionDto } from './dto/benchmark-transaction.dto';
 import { FeeBumpDto } from './dto/fee-bump.dto';
+import { PartialSignatureDto } from './dto/partial-signature.dto';
+import { ContractsService } from '../contracts/contracts.service';
 
 // ---------------------------------------------------------------------------
 // Static operation-type manifest returned by GET /composer/operations
@@ -353,6 +359,11 @@ export class ComposerService {
   private readonly CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
   private readonly SEQUENCE_TTL_MS = 30 * 1000; // 30 seconds
 
+  constructor(
+    @Inject(forwardRef(() => ContractsService))
+    private readonly contractsService?: ContractsService
+  ) {}
+
   getOperations() {
     return OPERATION_MANIFEST;
   }
@@ -669,108 +680,6 @@ export class ComposerService {
     }
   }
 
-  async benchmarkTransaction(dto: BenchmarkTransactionDto) {
-    const network = dto.network || 'testnet';
-    const txCount = Math.min(Math.max(dto.transactionCount || 10, 1), 50);
-    const concurrency = Math.min(Math.max(dto.concurrency || 5, 1), 20);
-
-    try {
-      new Transaction(dto.xdr, this.networkPassphrase(network));
-
-      const runBatch = async (mode: 'sequential' | 'concurrent') => {
-        const latencies: number[] = [];
-        let successCount = 0;
-        let failureCount = 0;
-        let sequenceConflicts = 0;
-
-        const startTime = Date.now();
-
-        if (mode === 'sequential') {
-          for (let i = 0; i < txCount; i++) {
-            const t0 = Date.now();
-            try {
-              await new Promise((res) => setTimeout(res, 50 + Math.random() * 50));
-              successCount++;
-              latencies.push(Date.now() - t0);
-            } catch {
-              failureCount++;
-              latencies.push(Date.now() - t0);
-            }
-          }
-        } else {
-          const chunks = Math.ceil(txCount / concurrency);
-          for (let c = 0; c < chunks; c++) {
-            const batchSize = Math.min(concurrency, txCount - c * concurrency);
-            const promises = Array.from({ length: batchSize }).map(async (_, idx) => {
-              const t0 = Date.now();
-              try {
-                await new Promise((res) => setTimeout(res, 30 + Math.random() * 40));
-                if (idx > 0 && Math.random() < 0.65) {
-                  sequenceConflicts++;
-                  failureCount++;
-                  throw new Error('tx_bad_seq');
-                }
-                successCount++;
-                latencies.push(Date.now() - t0);
-              } catch (err: unknown) {
-                const message = err instanceof Error ? err.message : String(err);
-                if (!message.includes('tx_bad_seq')) {
-                  failureCount++;
-                }
-                latencies.push(Date.now() - t0);
-              }
-            });
-            await Promise.all(promises);
-          }
-        }
-
-        const totalDurationMs = Date.now() - startTime;
-        const throughputTxPerSec =
-          totalDurationMs > 0
-            ? parseFloat(((txCount / totalDurationMs) * 1000).toFixed(2))
-            : txCount;
-
-        latencies.sort((a, b) => a - b);
-        const avgLatency = latencies.length
-          ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length)
-          : 0;
-        const p50 = latencies.length ? latencies[Math.floor(latencies.length * 0.5)] : 0;
-        const p95 = latencies.length ? latencies[Math.floor(latencies.length * 0.95)] : 0;
-        const p99 = latencies.length ? latencies[Math.floor(latencies.length * 0.99)] : 0;
-
-        return {
-          mode,
-          transactionCount: txCount,
-          concurrency,
-          successCount,
-          failureCount,
-          sequenceConflicts,
-          totalDurationMs,
-          throughputTxPerSec,
-          latencies: {
-            average: avgLatency,
-            p50,
-            p95,
-            p99,
-          },
-        };
-      };
-
-      const sequentialResult = await runBatch('sequential');
-      const concurrentResult = await runBatch('concurrent');
-
-      return {
-        network,
-        timestamp: Date.now(),
-        sequential: sequentialResult,
-        concurrent: concurrentResult,
-      };
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new BadRequestException(`Benchmark failed: ${message}`);
-    }
-  }
-
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mapOperation(dto: OperationDto): any {
     switch (dto.type) {
@@ -814,6 +723,8 @@ export class ComposerService {
           price: { n: Number(dto.price.n), d: Number(dto.price.d) },
         });
       case 'set_options':
+        // Validate multisig configuration if thresholds are being set
+        this.validateMultisigConfiguration(dto);
         return Operation.setOptions({
           inflationDest: dto.inflationDest,
           clearFlags: dto.clearFlags,
@@ -823,6 +734,10 @@ export class ComposerService {
           medThreshold: dto.medThreshold,
           highThreshold: dto.highThreshold,
           homeDomain: dto.homeDomain,
+          signer: dto.signer ? {
+            ed25519PublicKey: dto.signer.ed25519PublicKey,
+            weight: dto.signer.weight,
+          } : undefined,
         });
       case 'account_merge':
         return Operation.accountMerge({
@@ -917,10 +832,270 @@ export class ComposerService {
           minAmountA: validatePoolAmount('minAmountA', dto.minAmountA, true),
           minAmountB: validatePoolAmount('minAmountB', dto.minAmountB, true),
         });
+      case 'invoke_host_function':
+        return this.buildInvokeHostFunctionOperation(dto);
       default:
         throw new BadRequestException(
           `Unknown operation type: ${(dto as { type?: string }).type}`,
         );
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private buildInvokeHostFunctionOperation(dto: any): any {
+    if (!StrKey.isValidContract(dto.contractId)) {
+      throw new BadRequestException('Invalid contract ID format');
+    }
+
+    if (!dto.functionName || typeof dto.functionName !== 'string') {
+      throw new BadRequestException('Function name is required');
+    }
+
+    const args = dto.arguments || [];
+    const useAbi = dto.useAbi !== false; // Default to true
+    const rawMode = dto.rawMode === true; // Default to false
+
+    let scVals: xdr.ScVal[];
+
+    if (rawMode) {
+      // Raw mode: arguments are already ScVal objects or will be converted directly
+      scVals = this.convertRawArgumentsToScVals(args);
+    } else if (useAbi && this.contractsService) {
+      // ABI mode: validate and convert using ABI catalog
+      try {
+        const encodedArgs = this.contractsService.encodeAbiArguments(
+          dto.contractId,
+          dto.functionName,
+          args,
+          dto.wasmId
+        );
+        scVals = encodedArgs.map((arg: any) => xdr.ScVal.fromXDR(arg.xdrBase64, 'base64'));
+      } catch (error) {
+        // Fall back to native conversion if ABI is not available
+        this.logger.warn(`ABI validation failed for ${dto.contractId}.${dto.functionName}, falling back to native conversion: ${error.message}`);
+        scVals = args.map((arg: any) => nativeToScVal(arg));
+      }
+    } else {
+      // Native mode: convert using nativeToScVal
+      scVals = args.map((arg: any) => nativeToScVal(arg));
+    }
+
+    return Operation.invokeContractFunction({
+      contract: dto.contractId,
+      function: dto.functionName,
+      args: scVals,
+    });
+  }
+
+  private convertRawArgumentsToScVals(args: any[]): xdr.ScVal[] {
+    return args.map((arg) => {
+      if (typeof arg === 'object' && arg !== null) {
+        if (arg.type && arg.value !== undefined) {
+          // Structured ScVal format: { type: 'Address', value: 'G...' }
+          return this.buildScValFromType(arg.type, arg.value);
+        } else if (arg.xdr) {
+          // XDR format: { xdr: 'base64...' }
+          return xdr.ScVal.fromXDR(arg.xdr, 'base64');
+        }
+      }
+      // Fallback to native conversion
+      return nativeToScVal(arg);
+    });
+  }
+
+  private buildScValFromType(type: string, value: any): xdr.ScVal {
+    try {
+      switch (type.toLowerCase()) {
+        case 'address':
+          return Address.fromString(value).toScVal();
+        case 'bool':
+        case 'boolean':
+          return nativeToScVal(Boolean(value));
+        case 'bytes':
+          if (typeof value === 'string') {
+            return nativeToScVal(Buffer.from(value, 'hex'));
+          }
+          return nativeToScVal(Buffer.from(value));
+        case 'string':
+          return nativeToScVal(String(value));
+        case 'symbol':
+          return xdr.ScVal.scvSymbol(String(value));
+        case 'i32':
+          return nativeToScVal(parseInt(value));
+        case 'i64':
+        case 'i128':
+        case 'i256':
+          return nativeToScVal(BigInt(value));
+        case 'u32':
+          return nativeToScVal(parseInt(value));
+        case 'u64':
+        case 'u128':
+        case 'u256':
+          return nativeToScVal(BigInt(value));
+        case 'vec':
+        case 'array':
+          if (Array.isArray(value)) {
+            const elements = value.map(item => 
+              typeof item === 'object' && item.type 
+                ? this.buildScValFromType(item.type, item.value)
+                : nativeToScVal(item)
+            );
+            return xdr.ScVal.scvVec(elements);
+          }
+          throw new BadRequestException('Vec/Array type requires an array value');
+        case 'map':
+        case 'object':
+          if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+            const entries = Object.entries(value).map(([key, val]) => {
+              const keyScVal = nativeToScVal(key);
+              const valScVal = typeof val === 'object' && (val as any).type
+                ? this.buildScValFromType((val as any).type, (val as any).value)
+                : nativeToScVal(val);
+              return new xdr.ScMapEntry({ key: keyScVal, val: valScVal });
+            });
+            return xdr.ScVal.scvMap(entries);
+          }
+          throw new BadRequestException('Map/Object type requires an object value');
+        default:
+          // Fallback to native conversion for unknown types
+          return nativeToScVal(value);
+      }
+    } catch (error) {
+      throw new BadRequestException(
+        `Failed to convert ${type} value to ScVal: ${error.message}`
+      );
+    }
+  }
+
+  private validateMultisigConfiguration(dto: any): void {
+    const masterWeight = dto.masterWeight !== undefined ? Number(dto.masterWeight) : undefined;
+    const lowThreshold = dto.lowThreshold !== undefined ? Number(dto.lowThreshold) : undefined;
+    const medThreshold = dto.medThreshold !== undefined ? Number(dto.medThreshold) : undefined;
+    const highThreshold = dto.highThreshold !== undefined ? Number(dto.highThreshold) : undefined;
+
+    // Validate threshold hierarchy
+    if (lowThreshold !== undefined && medThreshold !== undefined && lowThreshold > medThreshold) {
+      throw new BadRequestException('Low threshold cannot be greater than medium threshold');
+    }
+
+    if (medThreshold !== undefined && highThreshold !== undefined && medThreshold > highThreshold) {
+      throw new BadRequestException('Medium threshold cannot be greater than high threshold');
+    }
+
+    if (lowThreshold !== undefined && highThreshold !== undefined && lowThreshold > highThreshold) {
+      throw new BadRequestException('Low threshold cannot be greater than high threshold');
+    }
+
+    // Validate threshold ranges
+    const thresholds = [lowThreshold, medThreshold, highThreshold].filter(t => t !== undefined);
+    for (const threshold of thresholds) {
+      if (threshold < 0 || threshold > 255) {
+        throw new BadRequestException('Thresholds must be between 0 and 255');
+      }
+    }
+
+    // Validate master weight
+    if (masterWeight !== undefined && (masterWeight < 0 || masterWeight > 255)) {
+      throw new BadRequestException('Master weight must be between 0 and 255');
+    }
+
+    // Validate signer weight
+    if (dto.signer?.weight !== undefined) {
+      const signerWeight = Number(dto.signer.weight);
+      if (signerWeight < 0 || signerWeight > 255) {
+        throw new BadRequestException('Signer weight must be between 0 and 255');
+      }
+    }
+
+    // Warning: Check if thresholds can be satisfied
+    if (masterWeight !== undefined && highThreshold !== undefined && masterWeight < highThreshold) {
+      this.logger.warn(`Master weight (${masterWeight}) is less than high threshold (${highThreshold}). Additional signers will be required.`);
+    }
+  }
+
+  async benchmarkTransaction(dto: BenchmarkTransactionDto) {
+    const network = dto.network || 'testnet';
+    const txCount = Math.min(Math.max(dto.transactionCount || 10, 1), 50);
+    const concurrency = Math.min(Math.max(dto.concurrency || 5, 1), 20);
+
+    const baseTx = 
+      new Transaction(dto.xdr, this.networkPassphrase(network));
+    const server = this.getHorizonServer(dto.network);
+
+    // Benchmark metrics
+    const results: {
+      transactionIndex: number;
+      submissionTime: number;
+      success: boolean;
+      hash?: string;
+      errorMessage?: string;
+    }[] = [];
+
+    let successCount = 0;
+    let failureCount = 0;
+    let totalSubmissionTime = 0;
+
+    const startTime = Date.now();
+
+    // Process transactions in batches for concurrency control
+    const batchSize = concurrency;
+    for (let batchStart = 0; batchStart < txCount; batchStart += batchSize) {
+      const batchEnd = Math.min(batchStart + batchSize, txCount);
+      const batchPromises = [];
+
+      for (let i = batchStart; i < batchEnd; i++) {
+        const promise = (async (transactionIndex: number) => {
+          const txStartTime = Date.now();
+          try {
+            const submissionResult = await server.submitTransaction(baseTx);
+            const submissionTime = Date.now() - txStartTime;
+            totalSubmissionTime += submissionTime;
+            successCount++;
+            
+            results.push({
+              transactionIndex,
+              submissionTime,
+              success: true,
+              hash: submissionResult.hash,
+            });
+          } catch (error) {
+            const submissionTime = Date.now() - txStartTime;
+            totalSubmissionTime += submissionTime;
+            failureCount++;
+            
+            results.push({
+              transactionIndex,
+              submissionTime,
+              success: false,
+              errorMessage: error instanceof Error ? error.message : String(error),
+            });
+          }
+        })(i);
+
+        batchPromises.push(promise);
+      }
+
+      // Wait for the current batch to complete before starting the next
+      await Promise.all(batchPromises);
+    }
+
+    const totalTime = Date.now() - startTime;
+
+    try {
+      return {
+        summary: {
+          totalTransactions: txCount,
+          successCount,
+          failureCount,
+          totalTime,
+          averageSubmissionTime: totalSubmissionTime / txCount,
+          transactionsPerSecond: (successCount / totalTime) * 1000,
+        },
+        results: results.sort((a, b) => a.transactionIndex - b.transactionIndex),
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new BadRequestException(`Benchmark failed: ${message}`);
     }
   }
 

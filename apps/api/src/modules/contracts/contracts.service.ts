@@ -556,6 +556,27 @@ export class ContractsService {
     };
   }
 
+  async uploadWasmOnly(wasmBuffer: Buffer): Promise<{ wasmHash: string; size: number }> {
+    if (!wasmBuffer || wasmBuffer.length === 0) {
+      throw new BadRequestException('WASM file is empty');
+    }
+    if (wasmBuffer.length > this.maxFileSize) {
+      throw new BadRequestException(`WASM file exceeds maximum size of ${this.maxFileSize / (1024 * 1024)}MB`);
+    }
+
+    // Check init auth / format basic validation (WASM magic header)
+    if (wasmBuffer.length < 4 || wasmBuffer.readUInt32LE(0) !== 0x6d736100) {
+      throw new BadRequestException('Invalid WASM format: missing magic header');
+    }
+
+    const wasmHashBytes = hash(wasmBuffer);
+    await this.uploadWasm(wasmBuffer);
+    return {
+      wasmHash: wasmHashBytes.toString('hex'),
+      size: wasmBuffer.length,
+    };
+  }
+
   async deployConfigured(params: {
     wasmBuffer: Buffer;
     admin?: string;
