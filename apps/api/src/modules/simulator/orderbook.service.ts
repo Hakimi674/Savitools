@@ -265,6 +265,9 @@ export class OrderbookService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(OrderbookService.name);
   private redisClient?: RedisClientType;
   private pollInterval?: NodeJS.Timeout;
+  /** In-flight connect attempt, so concurrent callers share one socket. */
+  private redisConnect?: Promise<boolean>;
+  private redisFailureLogged = false;
 
   constructor(private readonly configService: ConfigService) {}
 
@@ -273,28 +276,63 @@ export class OrderbookService implements OnModuleInit, OnModuleDestroy {
     this.redisClient = createClient({ url: redisUrl });
     this.redisClient.on('error', (err) => this.logger.error('Redis Client Error', err));
 
-    try {
-      await this.redisClient.connect();
-      this.logger.log('Connected to Redis for order book polling');
-
+    if (await this.ensureRedisReady()) {
       await this.registerActivePair(
         DEFAULT_ACTIVE_PAIR.selling,
         DEFAULT_ACTIVE_PAIR.buying,
         DEFAULT_ACTIVE_PAIR.network,
       );
-
       await this.pollActivePairs();
-      this.pollInterval = setInterval(() => this.pollActivePairs(), 60_000);
-    } catch (err) {
-      this.logger.error('Failed to connect to Redis', err as Error);
+    } else {
+      // Loud and recoverable instead of a silent permanent degradation: the
+      // poller below retries the connection on every tick, so a Redis that comes
+      // back later is picked up without restarting the API (#291).
+      this.logger.error(
+        'Order book polling is degraded: Redis is unavailable. Retrying every 60s; the cache is inactive until it connects.',
+      );
     }
+
+    this.pollInterval = setInterval(() => this.pollActivePairs(), 60_000);
+    this.pollInterval.unref?.();
+  }
+
+  /**
+   * True once the shared client is ready. A previous failed attempt does not
+   * poison the client: the next call retries, so the process recovers on its own.
+   */
+  private ensureRedisReady(): Promise<boolean> {
+    const client = this.redisClient;
+    if (!client) return Promise.resolve(false);
+    if (client.isReady) return Promise.resolve(true);
+
+    if (!this.redisConnect) {
+      this.redisConnect = client
+        .connect()
+        .then(() => {
+          this.redisFailureLogged = false;
+          this.logger.log('Connected to Redis for order book polling');
+          return true;
+        })
+        .catch((err: unknown) => {
+          if (!this.redisFailureLogged) {
+            this.logger.error('Failed to connect to Redis', err as Error);
+            this.redisFailureLogged = true;
+          }
+          return false;
+        })
+        .finally(() => {
+          this.redisConnect = undefined;
+        });
+    }
+
+    return this.redisConnect;
   }
 
   async onModuleDestroy(): Promise<void> {
     if (this.pollInterval) {
       clearInterval(this.pollInterval);
     }
-    if (this.redisClient) {
+    if (this.redisClient?.isOpen) {
       await this.redisClient.quit();
     }
   }
@@ -388,6 +426,7 @@ export class OrderbookService implements OnModuleInit, OnModuleDestroy {
     buying: string,
     network: OrderbookNetwork,
   ): Promise<void> {
+    if (!(await this.ensureRedisReady())) return;
     const redis = this.redisClient;
     if (!redis) return;
     try {
@@ -410,6 +449,7 @@ export class OrderbookService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async pollActivePairs(): Promise<void> {
+    if (!(await this.ensureRedisReady())) return;
     const redis = this.redisClient;
     if (!redis) return;
 

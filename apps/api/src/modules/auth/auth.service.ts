@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import { BoundedTtlMap } from '../../common/bounded-ttl-map';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as argon2 from 'argon2';
 import {
@@ -72,6 +73,12 @@ export interface IssueSessionContext {
 
 const HKDF_INFO_CONNECTED = ENCRYPTION_PURPOSES.CONNECTED_ACCOUNT;
 const HKDF_INFO_VAULT = ENCRYPTION_PURPOSES.VAULT_KEY;
+
+/**
+ * Ceiling for the two single-use passkey maps (#291): both are written from
+ * unauthenticated routes, so the bound is a memory guarantee, not a tuning knob.
+ */
+const PASSKEY_CHALLENGE_MAX_ENTRIES = 10_000;
 
 @Injectable()
 export class AuthService {
@@ -656,14 +663,20 @@ export class AuthService {
   // ─── WebAuthn passkeys (Savitura/Savitools#218) ───────────────────────────
 
   /**
-   * Single-use challenge store, bounded like the reset rate-limiter.
-   * Keys are `${userId}:${challenge}` so a challenge can only ever be
-   * consumed by the account that requested it.
+   * Single-use challenge store. Keys are `${userId}:${challenge}` so a challenge
+   * can only ever be consumed by the account that requested it.
+   *
+   * Written by unauthenticated routes (`POST /auth/passkeys/login/options`), so
+   * the entry bound is what keeps a caller from growing it without limit; the
+   * TTL is what makes an abandoned challenge unusable (Savitura/Savitools#291).
    */
-  private readonly passkeyChallenges = new Map<
+  private readonly passkeyChallenges = new BoundedTtlMap<
     string,
-    { challenge: string; type: 'registration' | 'assertion'; expiresAt: number; rpId: string }
-  >();
+    { challenge: string; type: 'registration' | 'assertion'; rpId: string }
+  >({
+    maxEntries: PASSKEY_CHALLENGE_MAX_ENTRIES,
+    ttlMs: PASSKEY_CHALLENGE_TTL_SECONDS * 1000,
+  });
 
   private storePasskeyChallenge(
     userId: string,
@@ -672,17 +685,10 @@ export class AuthService {
     rpId: string,
     allowedCredentialIds?: string[],
   ): void {
-    if (this.passkeyChallenges.size > 10_000) {
-      const now = Date.now();
-      for (const [key, entry] of this.passkeyChallenges) {
-        if (entry.expiresAt < now) this.passkeyChallenges.delete(key);
-      }
-    }
     this.passkeyChallenges.set(`${userId}:${challenge}`, {
       challenge,
       type,
       rpId,
-      expiresAt: Date.now() + PASSKEY_CHALLENGE_TTL_SECONDS * 1000,
     });
     if (allowedCredentialIds) {
       this.challengeKeyCache.set(challenge, allowedCredentialIds.sort().join(','));
@@ -697,9 +703,11 @@ export class AuthService {
     rpId: string,
   ): void {
     const key = `${userId}:${challenge}`;
+    // `get` removes an expired entry, and the explicit delete makes the
+    // challenge single-use: a replay finds nothing (Savitura/Savitools#291).
     const entry = this.passkeyChallenges.get(key);
     this.passkeyChallenges.delete(key);
-    if (!entry || entry.expiresAt < Date.now()) {
+    if (!entry) {
       throw new UnauthorizedException(
         'PASSKEY_CHALLENGE_INVALID: challenge is expired, unknown, or already used',
       );
@@ -944,7 +952,16 @@ export class AuthService {
     return { options: authOptions, allowCredentials };
   }
 
-  private challengeKeyCache = new Map<string, string>();
+  /**
+   * Allow-list per issued assertion challenge. Bounded and TTL'd like the
+   * challenge itself, and consumed on read: it used to be written on every
+   * unauthenticated login-options call and never deleted from
+   * (Savitura/Savitools#291).
+   */
+  private readonly challengeKeyCache = new BoundedTtlMap<string, string>({
+    maxEntries: PASSKEY_CHALLENGE_MAX_ENTRIES,
+    ttlMs: PASSKEY_CHALLENGE_TTL_SECONDS * 1000,
+  });
 
   /** Resolve the storage key owner for a login challenge based on allowCredentials. */
   private userIdForChallenge(allowCredentials: Array<{ id: string }>): string {
@@ -960,6 +977,8 @@ export class AuthService {
     rpId: string,
   ): void {
     const allowedRaw = this.challengeKeyCache.get(challenge);
+    // Consumed on read, so the allow-list cannot outlive the challenge it belongs to.
+    this.challengeKeyCache.delete(challenge);
     if (allowedRaw) {
       const allowed = allowedRaw.split(',');
       if (!allowed.includes(credentialId)) {

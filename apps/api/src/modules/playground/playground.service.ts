@@ -7,6 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { BoundedTtlMap } from '../../common/bounded-ttl-map';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createDecipheriv, pbkdf2Sync } from 'crypto';
 import { Repository } from 'typeorm';
@@ -24,6 +25,13 @@ interface CachedSpec {
   spec: Record<string, unknown>;
   fetchedAt: number;
 }
+
+/**
+ * One entry per provider, plus headroom for the custom-provider origin split.
+ * A stale copy outlives its freshness window (see `specCache`).
+ */
+const MAX_CACHED_SPECS = 32;
+const CACHED_SPEC_STALE_WINDOWS = 10;
 
 export interface ProxyResult {
   status: number;
@@ -123,7 +131,13 @@ export async function prunePlaygroundHistory(
 @Injectable()
 export class PlaygroundService {
   private readonly logger = new Logger(PlaygroundService.name);
-  private readonly specCache = new Map<string, CachedSpec>();
+  /**
+   * Provider OpenAPI documents, keyed by provider. The freshness window is
+   * `specTtlMs` and is checked per read; the map itself is bounded and keeps a
+   * stale copy for a few windows, which is what the refresh-failure fallback
+   * below serves (Savitura/Savitools#291).
+   */
+  private readonly specCache: BoundedTtlMap<string, CachedSpec>;
   private readonly specTtlMs: number;
 
   /**
@@ -147,6 +161,10 @@ export class PlaygroundService {
     private readonly encryptionService: EncryptionService,
   ) {
     this.specTtlMs = parseSpecTtlMs(this.configService.get('PLAYGROUND_SPEC_TTL_MS'));
+    this.specCache = new BoundedTtlMap({
+      maxEntries: MAX_CACHED_SPECS,
+      ttlMs: this.specTtlMs * CACHED_SPEC_STALE_WINDOWS,
+    });
   }
 
   async getSpec(provider: ApiKeyProvider): Promise<Record<string, unknown>> {

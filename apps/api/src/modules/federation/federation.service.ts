@@ -7,6 +7,7 @@ import {
   PayloadTooLargeException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { BoundedTtlMap } from '../../common/bounded-ttl-map';
 import * as smolToml from 'smol-toml';
 import { assertPublicHostname, MAX_SAFE_REDIRECTS } from '../../common/ssrf-guard';
 import { isStellarPublicKey } from '../../common/stellar-address';
@@ -150,7 +151,6 @@ export interface SepResult {
 interface CachedToml {
   parsed: Record<string, unknown>;
   fetchLatencyMs: number;
-  expiresAt: number;
 }
 
 // ─── Transfer request links (Savitura/Savitools#217) ────────────────────────
@@ -248,10 +248,21 @@ function parseBoundedToml(raw: string): Record<string, unknown> {
 @Injectable()
 export class FederationService {
   private readonly logger = new Logger(FederationService.name);
-  private readonly tomlCache = new Map<string, CachedToml>();
+  /**
+   * Process-local stellar.toml cache. `BoundedTtlMap` owns both the entry bound
+   * and the TTL, so this class no longer hand-rolls an LRU trim next to an
+   * `expiresAt` field (Savitura/Savitools#291). The in-flight map is a
+   * de-duplicator, not a cache: entries leave it in the same request.
+   */
+  private readonly tomlCache: BoundedTtlMap<string, CachedToml>;
   private readonly tomlInFlight = new Map<string, Promise<CachedToml>>();
 
-  constructor(private readonly configService?: ConfigService) {}
+  constructor(private readonly configService?: ConfigService) {
+    this.tomlCache = new BoundedTtlMap({
+      maxEntries: this.tomlCacheMaxEntries,
+      ttlMs: this.tomlCacheTtlMs,
+    });
+  }
 
   private get probeTimeoutMs(): number {
     return positiveInteger(
@@ -969,14 +980,9 @@ export class FederationService {
 
   private async fetchTomlRecord(domain: string): Promise<CachedToml> {
     const key = normalizeDomain(domain);
+    // A read refreshes recency, and an expired document is never served.
     const cached = this.tomlCache.get(key);
-    if (cached && cached.expiresAt > Date.now()) {
-      // Refresh insertion order so eviction remains least-recently-used.
-      this.tomlCache.delete(key);
-      this.tomlCache.set(key, cached);
-      return cached;
-    }
-    if (cached) this.tomlCache.delete(key);
+    if (cached) return cached;
 
     const inFlight = this.tomlInFlight.get(key);
     if (inFlight) return inFlight;
@@ -1003,14 +1009,8 @@ export class FederationService {
     const cached: CachedToml = {
       parsed: parseBoundedToml(raw),
       fetchLatencyMs: Date.now() - start,
-      expiresAt: Date.now() + this.tomlCacheTtlMs,
     };
     this.tomlCache.set(domain, cached);
-    while (this.tomlCache.size > this.tomlCacheMaxEntries) {
-      const oldest = this.tomlCache.keys().next().value as string | undefined;
-      if (!oldest) break;
-      this.tomlCache.delete(oldest);
-    }
     return cached;
   }
 
