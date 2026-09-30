@@ -28,6 +28,7 @@ SaviTools is a standalone product in the [Savitura](https://savitura.com) ecosys
 | **Order Book**            | Live DEX order book, spread analytics, and liquidity depth chart for any asset pair   | MVP    |
 | **Account Graph**         | Visualize signer networks, offers, and payment relationships with a force-directed graph | MVP |
 | **Contract Events**       | Decode, filter, and replay Soroban contract events from raw ScVal XDR                 | MVP    |
+| **Liquidity Pool Explorer** | Search Stellar AMM pools, calculate LP share values, and track favorite pools          | MVP    |
 
 See the [Contract Events guide](docs/contract-events.md) for filter criteria, limits, and API usage.
 

@@ -575,6 +575,205 @@ curl "http://localhost:3001/api/v1/simulator/fee?operations=3&network=testnet"
 
 ---
 
+### Liquidity Pools
+
+#### GET `/liquidity-pools/search?assetA=...&assetB=...&network=...`
+
+Search for liquidity pools by asset pair on Stellar.
+
+**Query Parameters:**
+- `assetA` (required): First asset in the pair. Use `XLM` for native or `CODE:ISSUER` for non-native.
+- `assetB` (required): Second asset in the pair. Use `XLM` for native or `CODE:ISSUER` for non-native.
+- `network` (optional, default `testnet`): `mainnet` or `testnet`
+
+**Request:**
+```bash
+curl "http://localhost:3001/api/v1/liquidity-pools/search?assetA=XLM&assetB=USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5&network=testnet"
+```
+
+**Response (200):**
+```json
+[
+  {
+    "poolId": "a468d41d61e...",
+    "network": "testnet",
+    "assetA": "native",
+    "assetB": "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+    "reserveA": "1000000.0000000",
+    "reserveB": "500000.0000000",
+    "totalShares": "707106.7811865",
+    "feePct": "0.30%",
+    "totalTrustlines": 42,
+    "type": "constant_product",
+    "spotPriceAperB": "2.0000000",
+    "spotPriceBperA": "0.5000000"
+  }
+]
+```
+
+**Errors:**
+- `400`: Invalid asset format or network
+
+---
+
+#### GET `/liquidity-pools/details?poolId=...&network=...`
+
+Get detailed information about a specific pool.
+
+**Query Parameters:**
+- `poolId` (required): 64-character hex pool ID
+- `network` (optional, default `testnet`): `mainnet` or `testnet`
+
+**Request:**
+```bash
+curl "http://localhost:3001/api/v1/liquidity-pools/details?poolId=a468d41d61e...&network=testnet"
+```
+
+**Response (200):**
+```json
+{
+  "poolId": "a468d41d61e...",
+  "network": "testnet",
+  "assetA": "native",
+  "assetB": "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+  "reserveA": "1000000.0000000",
+  "reserveB": "500000.0000000",
+  "totalShares": "707106.7811865",
+  "feePct": "0.30%",
+  "totalTrustlines": 42,
+  "type": "constant_product",
+  "spotPriceAperB": "2.0000000",
+  "spotPriceBperA": "0.5000000"
+}
+```
+
+**Errors:**
+- `400`: Invalid pool ID or network
+- `404`: Pool not found
+
+---
+
+#### POST `/liquidity-pools/share-value`
+
+Calculate the value of LP shares.
+
+**Request Body:**
+```json
+{
+  "poolId": "a468d41d61e...",
+  "shares": "100.0000000",
+  "network": "testnet"
+}
+```
+
+**Request:**
+```bash
+curl -X POST http://localhost:3001/api/v1/liquidity-pools/share-value \
+  -H "Content-Type: application/json" \
+  -d '{
+    "poolId": "a468d41d61e...",
+    "shares": "100.0000000",
+    "network": "testnet"
+  }'
+```
+
+**Response (201):**
+```json
+{
+  "poolId": "a468d41d61e...",
+  "network": "testnet",
+  "shares": "100.0000000",
+  "valueA": "141.4213562",
+  "valueB": "70.7106781",
+  "sharePercentage": "0.01414214",
+  "assetA": "native",
+  "assetB": "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"
+}
+```
+
+**Errors:**
+- `400`: Invalid input or pool state (e.g., empty pool, shares exceed total)
+- `404`: Pool not found
+
+---
+
+#### POST `/liquidity-pools/watch` (Protected)
+
+Add a pool to your watchlist. Requires authentication.
+
+**Request Body:**
+```json
+{
+  "poolId": "a468d41d61e...",
+  "assetA": "XLM",
+  "assetB": "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+  "label": "My XLM/USDC Pool",
+  "network": "testnet"
+}
+```
+
+**Response (201):**
+```json
+{
+  "id": "uuid",
+  "poolId": "a468d41d61e...",
+  "network": "testnet",
+  "assetA": "XLM",
+  "assetB": "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+  "label": "My XLM/USDC Pool",
+  "createdAt": "2024-01-01T00:00:00.000Z"
+}
+```
+
+**Errors:**
+- `400`: Invalid input or pool does not exist
+- `401`: Authentication required
+
+---
+
+#### POST `/liquidity-pools/unwatch` (Protected)
+
+Remove a pool from your watchlist. Requires authentication.
+
+**Request Body:**
+```json
+{
+  "id": "uuid"
+}
+```
+
+**Response (204):** No content
+
+**Errors:**
+- `401`: Authentication required
+- `404`: Watched pool not found
+
+---
+
+#### GET `/liquidity-pools/watched` (Protected)
+
+Get your watched pools. Requires authentication.
+
+**Response (200):**
+```json
+[
+  {
+    "id": "uuid",
+    "poolId": "a468d41d61e...",
+    "network": "testnet",
+    "assetA": "XLM",
+    "assetB": "USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5",
+    "label": "My XLM/USDC Pool",
+    "createdAt": "2024-01-01T00:00:00.000Z"
+  }
+]
+```
+
+**Errors:**
+- `401`: Authentication required
+
+---
+
 ### Composer (Transaction Building)
 
 #### GET `/composer/operations`
